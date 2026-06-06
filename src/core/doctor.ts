@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CrocConfig } from "./config.ts";
 import { getAgentDir } from "./config.ts";
@@ -75,6 +75,21 @@ function getRuntimeContext(cwd: string, config: CrocConfig): { context: RuntimeC
 	}
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getTaskplanePiManifestStatus(packagePath: string): DoctorCheck["status"] {
+	try {
+		const raw = JSON.parse(readFileSync(join(packagePath, "package.json"), "utf-8")) as unknown;
+		if (!isRecord(raw) || !isRecord(raw.pi)) return "fail";
+		const extensions = raw.pi.extensions;
+		return Array.isArray(extensions) && extensions.length > 0 ? "ok" : "fail";
+	} catch {
+		return "fail";
+	}
+}
+
 export function runDoctor(cwd: string, config: CrocConfig, configPath: string): DoctorCheck[] {
 	const runtime = getRuntimeContext(cwd, config);
 	const runtimeRoot = runtime.context.root;
@@ -100,12 +115,18 @@ export function runDoctor(cwd: string, config: CrocConfig, configPath: string): 
 	const taskplaneVersion = existsSync(taskplaneBinPath)
 		? versionMessage("node", [taskplaneBinPath, "version"])
 		: undefined;
+	const taskplaneManifestStatus = getTaskplanePiManifestStatus(taskplanePackagePath);
 	checks.push({
 		name: "taskplane",
-		status: taskplaneVersion ? "ok" : "fail",
+		status: taskplaneVersion && taskplaneManifestStatus === "ok" ? "ok" : "fail",
 		message: taskplaneVersion
 			? `${taskplaneVersion} (${taskplanePackagePath})`
 			: `missing bundled Taskplane at ${taskplaneBinPath}`,
+	});
+	checks.push({
+		name: "taskplane pi",
+		status: taskplaneManifestStatus,
+		message: join(taskplanePackagePath, "package.json"),
 	});
 
 	checks.push({

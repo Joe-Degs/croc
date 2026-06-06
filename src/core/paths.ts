@@ -21,6 +21,10 @@ export function getCrocProviderExtensionPath(): string {
 }
 
 export function getBundledTaskplanePackagePath(): string {
+	const sourceTaskplanePath = join(getPackageRoot(), "packages", "taskplane");
+	if (existsSync(join(sourceTaskplanePath, "package.json"))) {
+		return sourceTaskplanePath;
+	}
 	return dirname(require.resolve("taskplane/package.json"));
 }
 
