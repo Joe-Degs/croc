@@ -21,6 +21,10 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const DEFAULT_PORT = 8100;
 const MAX_PORT_ATTEMPTS = 20;
 const POLL_INTERVAL = 2000; // ms between state checks
+const AGENT_EVENTS_LIMIT = 300;
+const MAX_AGENT_EVENTS_FILE_BYTES = 2 * 1024 * 1024;
+const RUNTIME_AGENT_ID_RE = /^[\w-]+$/;
+const RUNTIME_BATCH_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,78}[A-Za-z0-9])?$/;
 
 // REPO_ROOT is resolved after parseArgs() — see initialization below.
 // In workspace mode, REPO_ROOT is the workspace root (passed via --root).
@@ -512,17 +516,72 @@ function loadRuntimeMergeSnapshots(batchId) {
   return snapshots;
 }
 
+function isValidRuntimeAgentId(agentId) {
+  return RUNTIME_AGENT_ID_RE.test(agentId);
+}
+
+function isValidRuntimeBatchId(batchId) {
+  return RUNTIME_BATCH_ID_RE.test(batchId) && !/^\.+$/.test(batchId);
+}
+
+function isPathInside(parent, child) {
+  const relative = path.relative(parent, child);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function resolveRuntimeAgentEventsPath(batchId, agentId) {
+  const agentsRoot = path.resolve(REPO_ROOT, ".pi", "runtime", batchId, "agents");
+  const eventsPath = path.resolve(agentsRoot, agentId, "events.jsonl");
+  if (!isPathInside(agentsRoot, eventsPath)) {
+    return { ok: false, statusCode: 403 };
+  }
+  return { ok: true, agentsRoot, eventsPath };
+}
+
+function resolveRealRuntimeAgentEventsPath(agentsRoot, eventsPath) {
+  try {
+    const realAgentsRoot = fs.realpathSync(agentsRoot);
+    const realEventsPath = fs.realpathSync(eventsPath);
+    if (!isPathInside(realAgentsRoot, realEventsPath)) return null;
+    return realEventsPath;
+  } catch {
+    return null;
+  }
+}
+
+function readRuntimeEventsJsonl(eventsPath) {
+  const stats = fs.statSync(eventsPath);
+  const bytesToRead = Math.min(stats.size, MAX_AGENT_EVENTS_FILE_BYTES);
+  if (bytesToRead === 0) return "";
+  const start = stats.size - bytesToRead;
+  const buffer = Buffer.alloc(bytesToRead);
+  const fd = fs.openSync(eventsPath, "r");
+  try {
+    fs.readSync(fd, buffer, 0, bytesToRead, start);
+  } finally {
+    fs.closeSync(fd);
+  }
+  const raw = buffer.toString("utf-8");
+  if (start === 0) return raw;
+  const firstNewline = raw.indexOf("\n");
+  return firstNewline >= 0 ? raw.slice(firstNewline + 1) : "";
+}
+
 /**
  * Load Runtime V2 agent events for a specific agent.
  * Returns the last N events from the agent's events.jsonl.
  */
 function loadRuntimeAgentEvents(batchId, agentId, maxEvents) {
   if (!batchId || !agentId) return [];
-  maxEvents = maxEvents || 200;
-  const eventsPath = path.join(REPO_ROOT, ".pi", "runtime", batchId, "agents", agentId, "events.jsonl");
+  maxEvents = maxEvents || AGENT_EVENTS_LIMIT;
+  const resolved = resolveRuntimeAgentEventsPath(batchId, agentId);
+  if (!resolved.ok) return [];
   try {
+    const eventsPath = resolved.eventsPath;
     if (!fs.existsSync(eventsPath)) return [];
-    const raw = fs.readFileSync(eventsPath, "utf-8");
+    const realEventsPath = resolveRealRuntimeAgentEventsPath(resolved.agentsRoot, eventsPath);
+    if (!realEventsPath) return [];
+    const raw = readRuntimeEventsJsonl(realEventsPath);
     const lines = raw.split("\n").filter(l => l.trim());
     const events = [];
     const start = Math.max(0, lines.length - maxEvents);
@@ -1545,7 +1604,8 @@ function handlePostPreferences(req, res) {
 
 function createServer() {
   const server = http.createServer((req, res) => {
-    const pathname = new URL(req.url, "http://localhost").pathname;
+    const reqUrl = new URL(req.url, "http://localhost");
+    const pathname = reqUrl.pathname;
 
     if (pathname === "/api/stream" && req.method === "GET") {
       handleSSE(req, res);
@@ -1556,26 +1616,29 @@ function createServer() {
       // TP-107: Serve Runtime V2 agent events (hardened)
       const agentId = decodeURIComponent(pathname.slice("/api/agent-events/".length));
       // Strict validation: same pattern as /api/conversation/:prefix
-      if (!/^[\w-]+$/.test(agentId)) {
+      if (!isValidRuntimeAgentId(agentId)) {
         res.writeHead(400, { "Content-Type": "text/plain" });
         res.end("Invalid agent ID");
         return;
       }
-      const batchState = loadBatchState();
-      // Path containment: verify resolved path stays inside runtime dir
-      if (batchState?.batchId) {
-        const runtimeBase = path.join(REPO_ROOT, ".pi", "runtime", batchState.batchId, "agents");
-        const resolvedAgent = path.resolve(runtimeBase, agentId);
-        if (!resolvedAgent.startsWith(path.resolve(runtimeBase))) {
-          res.writeHead(403, { "Content-Type": "text/plain" });
+      const requestedBatchId = reqUrl.searchParams.get("batchId");
+      if (requestedBatchId !== null && !isValidRuntimeBatchId(requestedBatchId)) {
+        res.writeHead(400, { "Content-Type": "text/plain" });
+        res.end("Invalid batch ID");
+        return;
+      }
+      const selectedBatchId = requestedBatchId ?? loadBatchState()?.batchId;
+      if (selectedBatchId) {
+        const resolved = resolveRuntimeAgentEventsPath(selectedBatchId, agentId);
+        if (!resolved.ok) {
+          res.writeHead(resolved.statusCode, { "Content-Type": "text/plain" });
           res.end("Forbidden");
           return;
         }
       }
       // Optional: ?sinceTs= to return only events after a timestamp
-      const reqUrl = new URL(req.url, "http://localhost");
       const sinceTs = parseInt(reqUrl.searchParams.get("sinceTs") || "0", 10);
-      let events = loadRuntimeAgentEvents(batchState?.batchId, agentId, 300);
+      let events = loadRuntimeAgentEvents(selectedBatchId, agentId, AGENT_EVENTS_LIMIT);
       if (sinceTs > 0) {
         events = events.filter(e => (e.ts || 0) > sinceTs);
       }
