@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=../../schemas/croc.schema.json
+configVersion: 1
+profile: basic
+
+runtime:
+  tmux:
+    enabled: true
+    session: croc-basic
+    attach: true
+
+taskplane:
+  projectName: basic-project
+  projectDescription: Existing git project managed by Croc.
+  tasksPath: taskplane-tasks
+  maxLanes: 2
+  dashboard:
+    enabled: true
+    port: 8099
+
+work:
+  enabled: false

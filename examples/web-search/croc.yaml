@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=../../schemas/croc.schema.json
+configVersion: 1
+profile: web-search
+
+batteries:
+  webSearch:
+    enabled: true
+    provider: searxng
+    url: https://llm.hubtel.com/searxng
+
+work:
+  enabled: true
+  overwrite: if-generated
+  tasks:
+    - id: TASK-001
+      title: Research smoke
+      size: S
+      prompt: |
+        Use web search to find the official Kubernetes documentation home page.
+
+        ### Step 0: Search
+
+        - [ ] Search the web
+
+        ### Step 1: Record
+
+        - [ ] Create `research-smoke.md` with the link and a one-sentence note

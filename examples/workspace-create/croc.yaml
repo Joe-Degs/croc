@@ -1,0 +1,71 @@
+# yaml-language-server: $schema=../../schemas/croc.schema.json
+configVersion: 1
+profile: website-workspace
+
+runtime:
+  tmux:
+    enabled: true
+    session: croc-website-workspace
+    attach: true
+
+workspace:
+  enabled: true
+  root: .croc/workspace
+  defaultRepo: site
+  taskPacketRepo: packets
+  strictRouting: true
+  repos:
+    - id: site
+      mode: create
+      path: repos/site
+      initialBranch: main
+      initialCommit: true
+
+taskplane:
+  projectName: website-workspace
+  projectDescription: New website repo created by Croc. The task prompt decides the stack.
+  tasksPath: taskplane-tasks
+  maxLanes: 1
+
+skills:
+  inline:
+    - name: landing-page
+      description: Use when building a compact product landing page without a framework requirement.
+      body: |
+        # Landing page guidance
+
+        Prefer a single `index.html` file with embedded CSS unless the task asks for a framework.
+        Keep the page small, responsive, and easy to inspect.
+
+work:
+  enabled: true
+  overwrite: if-generated
+  context: |
+    # Website context
+
+    Croc created the git repo only. The task prompt decides the implementation stack.
+  tasks:
+    - id: TASK-001
+      title: Build landing page
+      repo: site
+      size: M
+      skills:
+        - landing-page
+      prompt: |
+        Build a small landing page for a product called Croc.
+
+        Use a single `index.html` file unless the user asks for a framework.
+
+        ### Step 0: Inspect
+
+        - [ ] Check the repo state
+        - [ ] Read the task context
+
+        ### Step 1: Build
+
+        - [ ] Create the landing page
+
+        ### Step 2: Verify
+
+        - [ ] Open or inspect the generated file
+        - [ ] Record any blockers in STATUS.md

@@ -1,0 +1,458 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"title": "Croc config",
+	"description": "Configuration for Croc, a Taskplane launcher and profile manager for Pi. Croc accepts partial configs and merges them with defaults.",
+	"type": "object",
+	"additionalProperties": false,
+	"properties": {
+		"$schema": {
+			"type": "string",
+			"description": "JSON schema reference for editor validation. YAML users can use a yaml-language-server comment instead."
+		},
+		"configVersion": {
+			"const": 1,
+			"description": "Croc config format version."
+		},
+		"profile": {
+			"type": "string",
+			"minLength": 1,
+			"description": "Profile label shown in Croc-aware Pi sessions."
+		},
+		"runtime": {
+			"$ref": "#/$defs/runtime"
+		},
+		"workspace": {
+			"$ref": "#/$defs/workspace"
+		},
+		"skills": {
+			"$ref": "#/$defs/skills"
+		},
+		"pi": {
+			"$ref": "#/$defs/pi"
+		},
+		"taskplane": {
+			"$ref": "#/$defs/taskplane"
+		},
+		"work": {
+			"$ref": "#/$defs/work"
+		},
+		"batteries": {
+			"$ref": "#/$defs/batteries"
+		}
+	},
+	"$defs": {
+		"apiName": {
+			"type": "string",
+			"enum": ["openai-completions", "openai-responses", "anthropic-messages", "google-generate-content"]
+		},
+		"contentSource": {
+			"description": "Inline content or a file path resolved relative to the Croc config file.",
+			"oneOf": [
+				{
+					"type": "string"
+				},
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"inline": {
+							"type": "string"
+						},
+						"file": {
+							"type": "string",
+							"minLength": 1
+						}
+					},
+					"oneOf": [{ "required": ["inline"] }, { "required": ["file"] }]
+				}
+			]
+		},
+		"thinkingLevel": {
+			"type": "string",
+			"enum": ["", "off", "minimal", "low", "medium", "high", "xhigh"]
+		},
+		"runtime": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"tmux": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"enabled": {
+							"type": "boolean"
+						},
+						"session": {
+							"type": "string",
+							"minLength": 1
+						},
+						"attach": {
+							"type": "boolean"
+						}
+					}
+				}
+			}
+		},
+		"workspace": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"enabled": {
+					"type": "boolean",
+					"description": "When true, Croc writes and runs from workspace.root instead of the source config directory."
+				},
+				"root": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Workspace root path. Relative paths resolve from the Croc source root, which is --cwd or the process cwd."
+				},
+				"defaultRepo": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Taskplane default editable repo ID."
+				},
+				"taskPacketRepo": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Repo ID that owns generated Taskplane task packets. Croc creates it if omitted from repos."
+				},
+				"strictRouting": {
+					"type": "boolean",
+					"description": "When true, generated tasks must set work.tasks[].repo."
+				},
+				"repos": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/workspaceRepo"
+					}
+				}
+			}
+		},
+		"workspaceRepo": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["id", "mode", "path"],
+			"properties": {
+				"id": {
+					"type": "string",
+					"pattern": "^[A-Za-z0-9_.-]+$"
+				},
+				"mode": {
+					"type": "string",
+					"enum": ["create", "clone", "attach"]
+				},
+				"path": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Repo path. Relative paths resolve from workspace.root. attach paths may be absolute."
+				},
+				"remote": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Git remote URL or local path for clone mode."
+				},
+				"initialBranch": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Branch name for created repos or branch selector for clone mode."
+				},
+				"initialCommit": {
+					"type": "boolean",
+					"description": "For create mode, create a seed file and initial commit. Defaults to true."
+				}
+			},
+			"allOf": [
+				{
+					"if": {
+						"properties": { "mode": { "const": "clone" } },
+						"required": ["mode"]
+					},
+					"then": {
+						"required": ["remote"]
+					}
+				}
+			]
+		},
+		"skills": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"enabled": {
+					"type": "boolean",
+					"description": "When true, Croc registers and materializes configured Pi skills."
+				},
+				"enableCommands": {
+					"type": "boolean",
+					"description": "Set Pi enableSkillCommands for /skill:name commands."
+				},
+				"bundled": {
+					"type": "array",
+					"items": { "$ref": "#/$defs/skillName" },
+					"description": "Bundled Croc skill names to register."
+				},
+				"paths": {
+					"type": "array",
+					"items": { "type": "string", "minLength": 1 },
+					"description": "External skill files or directories. Relative paths resolve from the Croc config file."
+				},
+				"inline": {
+					"type": "array",
+					"items": { "$ref": "#/$defs/inlineSkill" }
+				},
+				"work": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"include": {
+							"type": "array",
+							"items": { "$ref": "#/$defs/skillName" },
+							"description": "Skills to reference in every generated work task prompt."
+						}
+					}
+				}
+			}
+		},
+		"skillName": {
+			"type": "string",
+			"pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+			"maxLength": 64
+		},
+		"inlineSkill": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["name", "description", "body"],
+			"properties": {
+				"name": { "$ref": "#/$defs/skillName" },
+				"description": { "type": "string", "minLength": 1, "maxLength": 1024 },
+				"body": { "$ref": "#/$defs/contentSource" },
+				"disableModelInvocation": { "type": "boolean" },
+				"allowedTools": { "type": "string" },
+				"compatibility": { "type": "string", "maxLength": 500 },
+				"license": { "type": "string" },
+				"metadata": {
+					"type": "object",
+					"additionalProperties": {
+						"type": ["string", "number", "boolean"]
+					}
+				}
+			}
+		},
+		"pi": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"command": {
+					"type": "string",
+					"minLength": 1
+				},
+				"model": {
+					"type": "string"
+				},
+				"thinking": {
+					"$ref": "#/$defs/thinkingLevel"
+				},
+				"name": {
+					"type": "string"
+				},
+				"extraArgs": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"provider": {
+					"$ref": "#/$defs/provider"
+				}
+			}
+		},
+		"provider": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"enabled": {
+					"type": "boolean"
+				},
+				"name": {
+					"type": "string",
+					"minLength": 1
+				},
+				"displayName": {
+					"type": "string",
+					"minLength": 1
+				},
+				"baseUrl": {
+					"type": "string",
+					"minLength": 1
+				},
+				"api": {
+					"$ref": "#/$defs/apiName"
+				},
+				"apiKeyEnv": {
+					"type": "string",
+					"minLength": 1
+				},
+				"authHeader": {
+					"type": "boolean"
+				},
+				"models": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/providerModel"
+					}
+				}
+			}
+		},
+		"providerModel": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["id", "name", "reasoning", "input", "contextWindow", "maxTokens", "cost"],
+			"properties": {
+				"id": {
+					"type": "string",
+					"minLength": 1
+				},
+				"name": {
+					"type": "string",
+					"minLength": 1
+				},
+				"reasoning": {
+					"type": "boolean"
+				},
+				"input": {
+					"type": "array",
+					"items": {
+						"type": "string",
+						"enum": ["text", "image"]
+					}
+				},
+				"contextWindow": {
+					"type": "integer",
+					"minimum": 1
+				},
+				"maxTokens": {
+					"type": "integer",
+					"minimum": 1
+				},
+				"cost": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["input", "output", "cacheRead", "cacheWrite"],
+					"properties": {
+						"input": { "type": "number", "minimum": 0 },
+						"output": { "type": "number", "minimum": 0 },
+						"cacheRead": { "type": "number", "minimum": 0 },
+						"cacheWrite": { "type": "number", "minimum": 0 }
+					}
+				}
+			}
+		},
+		"taskplane": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"enabled": { "type": "boolean" },
+				"packageSource": { "type": "string", "minLength": 1 },
+				"projectName": { "type": "string" },
+				"projectDescription": { "type": "string" },
+				"tasksPath": { "type": "string", "minLength": 1 },
+				"taskPrefix": { "type": "string", "minLength": 1 },
+				"maxLanes": { "type": "integer", "minimum": 1 },
+				"worktreeLocation": { "type": "string", "enum": ["subdirectory", "sibling"] },
+				"worktreePrefix": { "type": "string", "minLength": 1 },
+				"sessionPrefix": { "type": "string", "minLength": 1 },
+				"integration": { "type": "string", "enum": ["manual", "supervised", "auto"] },
+				"workerModel": { "type": "string" },
+				"reviewerModel": { "type": "string" },
+				"mergeModel": { "type": "string" },
+				"supervisorModel": { "type": "string" },
+				"workerThinking": { "$ref": "#/$defs/thinkingLevel" },
+				"reviewerThinking": { "$ref": "#/$defs/thinkingLevel" },
+				"mergeThinking": { "$ref": "#/$defs/thinkingLevel" },
+				"supervisorAutonomy": { "type": "string", "enum": ["interactive", "supervised", "autonomous"] },
+				"maxWorkerMinutes": { "type": "integer", "minimum": 1 },
+				"stallTimeoutMinutes": { "type": "integer", "minimum": 1 },
+				"maxWorkerIterations": { "type": "integer", "minimum": 1 },
+				"mergeVerify": { "type": "array", "items": { "type": "string" } },
+				"testingCommands": { "type": "object", "additionalProperties": { "type": "string" } },
+				"dashboard": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"enabled": { "type": "boolean" },
+						"port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+						"applyGlobalPreference": { "type": "boolean" },
+						"pidFile": { "type": "string", "minLength": 1 }
+					}
+				}
+			}
+		},
+		"work": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"enabled": { "type": "boolean" },
+				"overwrite": { "type": "string", "enum": ["never", "if-generated", "always"] },
+				"context": { "$ref": "#/$defs/contentSource" },
+				"sources": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["directory", "mode"],
+						"properties": {
+							"directory": { "type": "string", "minLength": 1 },
+							"mode": { "type": "string", "const": "copy" }
+						}
+					}
+				},
+				"tasks": {
+					"type": "array",
+					"items": { "$ref": "#/$defs/workTask" }
+				}
+			}
+		},
+		"workTask": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["id", "title", "prompt"],
+			"properties": {
+				"id": { "type": "string", "pattern": "^[A-Z]+-[0-9]+$" },
+				"title": { "type": "string", "minLength": 1 },
+				"repo": { "type": "string", "minLength": 1 },
+				"skills": { "type": "array", "items": { "$ref": "#/$defs/skillName" } },
+				"folder": { "type": "string", "pattern": "^[^/\\\\]+$" },
+				"size": { "type": "string", "enum": ["S", "M", "L"] },
+				"reviewLevel": { "type": "integer", "minimum": 0 },
+				"dependencies": { "type": "array", "items": { "type": "string" } },
+				"contextDocs": { "type": "array", "items": { "type": "string" } },
+				"fileScope": { "type": "array", "items": { "type": "string" } },
+				"prompt": { "$ref": "#/$defs/contentSource" }
+			}
+		},
+		"batteries": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"webSearch": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"enabled": { "type": "boolean" },
+						"packageSource": { "type": "string", "minLength": 1 },
+						"provider": { "type": "string", "const": "searxng" },
+						"url": { "type": "string" },
+						"apiKeyEnv": { "type": "string", "minLength": 1 }
+					}
+				},
+				"piLens": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"enabled": { "type": "boolean" },
+						"packageSource": { "type": "string", "minLength": 1 }
+					}
+				}
+			}
+		}
+	}
+}

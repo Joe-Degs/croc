@@ -1,0 +1,51 @@
+# yaml-language-server: $schema=../../schemas/croc.schema.json
+configVersion: 1
+profile: polyrepo-workspace
+
+workspace:
+  enabled: true
+  root: .croc/workspace
+  defaultRepo: app
+  taskPacketRepo: packets
+  strictRouting: true
+  repos:
+    - id: app
+      mode: clone
+      path: repos/app
+      remote: git@github.com:example/app.git
+      initialBranch: main
+
+    - id: shared
+      mode: attach
+      path: /Users/me/src/shared
+
+taskplane:
+  projectName: polyrepo-workspace
+  tasksPath: taskplane-tasks
+  maxLanes: 2
+
+work:
+  enabled: true
+  overwrite: if-generated
+  tasks:
+    - id: TASK-001
+      title: Update app integration
+      repo: app
+      size: M
+      contextDocs:
+        - packets/taskplane-tasks/CONTEXT.md
+      prompt: |
+        Update the app repo to consume the shared package API.
+
+        ### Step 0: Inspect
+
+        - [ ] Check app and shared repo state
+        - [ ] Identify the integration point
+
+        ### Step 1: Implement
+
+        - [ ] Make the smallest correct app change
+
+        ### Step 2: Verify
+
+        - [ ] Run the relevant app checks
