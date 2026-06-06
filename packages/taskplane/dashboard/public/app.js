@@ -181,7 +181,7 @@ function createOutputBlock(payload, options = {}) {
   const text = payload?.text ?? payload?.outputDelta ?? payload?.output ?? options.text ?? "";
   const block = document.createElement("div");
   block.className = "worker-feed-output";
-  if (payload?.isError || options.isError) block.classList.add("worker-feed-output-error");
+  if (payload?.isError || options.isError) block.classList.add("worker-feed-output-error", "error");
 
   const pre = document.createElement("pre");
   pre.className = "worker-feed-output-pre";
@@ -2387,6 +2387,10 @@ function ensureWorkerFeedContainer() {
   if (!container) {
     container = document.createElement('div');
     container.className = 'worker-feed';
+    if (typeof container.setAttribute === 'function') {
+      container.setAttribute('role', 'log');
+      container.setAttribute('aria-label', 'Worker activity feed');
+    }
     $terminalBody.appendChild(container);
   }
   return container;
@@ -2574,7 +2578,7 @@ function renderToolResultFeedEvent(evt, container) {
     group.status.textContent = payload.isError ? `${toolLabel(payload)} failed` : `${toolLabel(payload)} complete`;
     if (output) {
       const block = ensureToolGroupOutput(group, { ...payload, output: '' });
-      if (payload.isError === true) block.classList.add('worker-feed-output-error');
+      if (payload.isError === true) block.classList.add('worker-feed-output-error', 'error');
       if (payload.text != null || payload.output != null) replaceOutputText(block, output);
       else appendOutputText(block, output);
       const badge = createTruncationBadge(payload);
@@ -3194,8 +3198,9 @@ function renderHistorySummary(entry) {
       let tTokenStr = `↑${formatTokens(tTotalIn)} ↓${formatTokens(tTok.output || 0)}`;
       const statusCls = `status-${t.status}`;
       const agentId = historyTaskAgentId(t);
+      const feedLabel = `Open worker feed for ${String(t.taskId)}`;
       const feedAction = agentId
-        ? `<button type="button" class="history-worker-feed-btn" onclick="openHistoricalWorkerFeed(${escapeHtml(JSON.stringify(String(entry.batchId)))},${escapeHtml(JSON.stringify(String(agentId)))},${escapeHtml(JSON.stringify(String(t.taskId)))})">Worker feed</button>`
+        ? `<button type="button" class="history-worker-feed-btn" aria-label="${escapeHtml(feedLabel)}" onclick="openHistoricalWorkerFeed(${escapeHtml(JSON.stringify(String(entry.batchId)))},${escapeHtml(JSON.stringify(String(agentId)))},${escapeHtml(JSON.stringify(String(t.taskId)))})">Worker feed</button>`
         : "—";
       html += `<tr>
         <td>${escapeHtml(t.taskId)}</td>
