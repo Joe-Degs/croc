@@ -189,33 +189,38 @@ describe("2.x: Payload safety (TP-111)", () => {
 // ── 3. Dashboard renderer compatibility ─────────────────────────────
 
 describe("3.x: Dashboard renders V2 conversation events (TP-111)", () => {
-	it("3.1: renderV2Event handles assistant_message with payload.text", () => {
-		const fnIdx = dashboardAppSrc.indexOf("function renderV2Event");
-		const block = dashboardAppSrc.slice(fnIdx, fnIdx + 2000);
+	it("3.1: worker feed handles assistant_message with payload text", () => {
+		const fnIdx = dashboardAppSrc.indexOf("function renderWorkerFeedEvent");
+		const block = dashboardAppSrc.slice(fnIdx, fnIdx + 4000);
 		expect(block).toContain("'assistant_message'");
-		expect(block).toContain("evt.payload?.text");
+		expect(dashboardAppSrc).toContain("renderAssistantFeedEvent");
+		expect(dashboardAppSrc).toContain("payloadText(payload, ['text', 'message'])");
 	});
 
-	it("3.2: renderV2Event handles prompt_sent with payload.text", () => {
-		const fnIdx = dashboardAppSrc.indexOf("function renderV2Event");
-		const block = dashboardAppSrc.slice(fnIdx, fnIdx + 2000);
+	it("3.2: worker feed handles prompt_sent with prompt text", () => {
+		const fnIdx = dashboardAppSrc.indexOf("function renderWorkerFeedEvent");
+		const block = dashboardAppSrc.slice(fnIdx, fnIdx + 4000);
 		expect(block).toContain("'prompt_sent'");
-		expect(block).toContain("evt.payload?.text");
+		expect(dashboardAppSrc).toContain("renderPromptFeedEvent");
+		expect(dashboardAppSrc).toContain("payloadText(payload, ['text', 'prompt', 'content'])");
 	});
 
-	it("3.3: renderV2Event handles tool_call with payload.tool and payload.path", () => {
-		const fnIdx = dashboardAppSrc.indexOf("function renderV2Event");
-		const block = dashboardAppSrc.slice(fnIdx, fnIdx + 2000);
+	it("3.3: worker feed handles tool_call with tool and path metadata", () => {
+		const fnIdx = dashboardAppSrc.indexOf("function renderWorkerFeedEvent");
+		const block = dashboardAppSrc.slice(fnIdx, fnIdx + 4000);
 		expect(block).toContain("'tool_call'");
-		expect(block).toContain("evt.payload?.tool");
-		expect(block).toContain("evt.payload?.path");
+		expect(dashboardAppSrc).toContain("toolLabel(payload)");
+		expect(dashboardAppSrc).toContain("payload.path");
 	});
 
-	it("3.4: renderV2Event handles tool_result with payload.summary", () => {
-		const fnIdx = dashboardAppSrc.indexOf("function renderV2Event");
-		const block = dashboardAppSrc.slice(fnIdx, fnIdx + 2000);
+	it("3.4: worker feed handles tool_result with text, output, or summary", () => {
+		const fnIdx = dashboardAppSrc.indexOf("function renderWorkerFeedEvent");
+		const block = dashboardAppSrc.slice(fnIdx, fnIdx + 4000);
 		expect(block).toContain("'tool_result'");
-		expect(block).toContain("evt.payload?.summary");
+		expect(dashboardAppSrc).toContain("renderToolResultFeedEvent");
+		expect(dashboardAppSrc).toContain(
+			"payloadText(payload, ['text', 'outputDelta', 'output', 'summary'])",
+		);
 	});
 });
 

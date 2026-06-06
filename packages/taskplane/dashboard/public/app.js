@@ -160,7 +160,7 @@ function formatTruncationLabel(payload) {
   if (!payload || payload.truncated !== true) return "";
   const originalBytes = Number(payload.originalBytes);
   if (!Number.isFinite(originalBytes) || originalBytes <= 0) return "output truncated";
-  const visibleText = payload.output ?? payload.outputDelta ?? "";
+  const visibleText = payload.text ?? payload.outputDelta ?? payload.output ?? "";
   const visibleBytes = outputByteLength(visibleText);
   if (visibleBytes > 0 && visibleBytes < originalBytes) {
     return `${formatBytes(visibleBytes)} captured of ${formatBytes(originalBytes)}`;
@@ -178,7 +178,7 @@ function createTruncationBadge(payload) {
 }
 
 function createOutputBlock(payload, options = {}) {
-  const text = payload?.output ?? payload?.outputDelta ?? options.text ?? "";
+  const text = payload?.text ?? payload?.outputDelta ?? payload?.output ?? options.text ?? "";
   const block = document.createElement("div");
   block.className = "worker-feed-output";
   if (payload?.isError || options.isError) block.classList.add("worker-feed-output-error");
@@ -192,6 +192,21 @@ function createOutputBlock(payload, options = {}) {
   if (badge) block.appendChild(badge);
 
   return block;
+}
+
+function appendOutputText(outputBlock, text) {
+  if (!outputBlock || !text) return;
+  const pre = outputBlock.querySelector('.worker-feed-output-pre') || outputBlock.querySelector('pre');
+  if (!pre) return;
+  appendAnsiText(pre, text);
+}
+
+function replaceOutputText(outputBlock, text) {
+  if (!outputBlock) return;
+  const pre = outputBlock.querySelector('.worker-feed-output-pre') || outputBlock.querySelector('pre');
+  if (!pre) return;
+  pre.textContent = '';
+  appendAnsiText(pre, text);
 }
 
 /** Format token count as human-readable (e.g., 1.2k, 45k, 1.2M). */
@@ -2019,6 +2034,7 @@ function render(data) {
     viewingHistoryId = null;
     $historyPanel.style.display = "none";
     $historySelect.value = "";
+    resetV2FeedState();
   }
 
   if (noBatchRendered) {
@@ -2125,11 +2141,19 @@ function resolveV2AgentId(sessionName) {
 }
 
 let viewerV2AgentId = null; // Runtime V2 agent ID for current conversation view
+let viewerWorkerFeedContext = null;
 
 function viewConversation(sessionName) {
   // Toggle off if already viewing this session
   if (viewerMode === 'conversation' && viewerTarget === sessionName && $terminalPanel.style.display !== 'none') {
     closeViewer();
+    return;
+  }
+
+  // TP-107: Resolve V2 agent ID for events endpoint
+  const v2AgentId = resolveV2AgentId(sessionName);
+  if (v2AgentId) {
+    viewWorkerFeed({ sessionName, agentId: v2AgentId, batchId: null, historical: false });
     return;
   }
 
@@ -2140,12 +2164,10 @@ function viewConversation(sessionName) {
   autoScrollOn = true;
   convRenderedLines = 0;
 
-  // TP-107: Resolve V2 agent ID for events endpoint
-  const v2AgentId = resolveV2AgentId(sessionName);
-  viewerV2AgentId = v2AgentId;
+  viewerV2AgentId = null;
+  viewerWorkerFeedContext = null;
 
-  const label = v2AgentId || sessionName;
-  $terminalTitle.textContent = `Worker Conversation — ${label}`;
+  $terminalTitle.textContent = `Worker Conversation — ${sessionName}`;
   $autoScrollText.textContent = 'Follow feed';
   $autoScrollCheckbox.checked = true;
   $terminalPanel.style.display = '';
@@ -2157,12 +2179,71 @@ function viewConversation(sessionName) {
   $terminalPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+function normalizeWorkerFeedContext(context) {
+  return {
+    sessionName: context.sessionName || context.agentId,
+    agentId: context.agentId,
+    batchId: context.batchId || null,
+    historical: context.historical === true,
+  };
+}
+
+function isSameWorkerFeedContext(a, b) {
+  if (!a || !b) return false;
+  return a.agentId === b.agentId && a.batchId === b.batchId && a.historical === b.historical;
+}
+
+function viewWorkerFeed(context) {
+  const feedContext = normalizeWorkerFeedContext(context);
+  if (!feedContext.agentId) return;
+
+  if (viewerMode === 'conversation' && isSameWorkerFeedContext(viewerWorkerFeedContext, feedContext) && $terminalPanel.style.display !== 'none') {
+    closeViewer();
+    return;
+  }
+
+  closeViewer();
+
+  viewerMode = 'conversation';
+  viewerTarget = feedContext.sessionName || feedContext.agentId;
+  viewerWorkerFeedContext = feedContext;
+  viewerV2AgentId = feedContext.agentId;
+  autoScrollOn = true;
+  convRenderedLines = 0;
+  resetV2FeedState();
+
+  const title = feedContext.historical
+    ? `Historical worker feed — ${feedContext.batchId} / ${feedContext.agentId}`
+    : `Worker feed — ${feedContext.agentId}`;
+  $terminalTitle.textContent = title;
+  $autoScrollText.textContent = 'Follow feed';
+  $autoScrollCheckbox.checked = true;
+  $terminalPanel.style.display = '';
+  $terminalBody.innerHTML = '';
+  ensureWorkerFeedContainer();
+
+  pollConversation();
+  viewerTimer = setInterval(pollConversation, 2000);
+
+  $terminalPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function openHistoricalWorkerFeed(batchId, agentId, sessionName) {
+  viewWorkerFeed({ batchId, agentId, sessionName: sessionName || agentId, historical: true });
+}
+
+function buildAgentEventsEndpoint(context) {
+  const path = `/api/agent-events/${encodeURIComponent(context.agentId)}`;
+  if (!context.batchId) return path;
+  return `${path}?batchId=${encodeURIComponent(context.batchId)}`;
+}
+
 function pollConversation() {
   // TP-107: prefer V2 agent events when available, fallback to legacy conversation
-  const endpoint = viewerV2AgentId
-    ? `/api/agent-events/${encodeURIComponent(viewerV2AgentId)}`
+  const isV2 = !!viewerWorkerFeedContext;
+  const endpoint = isV2
+    ? buildAgentEventsEndpoint(viewerWorkerFeedContext)
     : `/api/conversation/${encodeURIComponent(viewerTarget)}`;
-  const isV2 = !!viewerV2AgentId;
 
   fetch(endpoint)
     .then(r => isV2 ? r.json() : r.text())
@@ -2229,6 +2310,13 @@ function pollConversation() {
 // (server caps at 300) doesn't stall when new tail events push older ones out.
 let v2LastCursor = null; // signature of last rendered event
 let v2FirstRender = true;
+let v2ToolGroups = new Map();
+
+function resetV2FeedState() {
+  v2LastCursor = null;
+  v2FirstRender = true;
+  v2ToolGroups = new Map();
+}
 
 function v2EventSignature(evt) {
   return `${evt.ts || 0}:${evt.type || ''}:${JSON.stringify(evt.payload || {}).slice(0, 80)}`;
@@ -2242,16 +2330,15 @@ function renderV2AgentEvents(events) {
     return;
   }
 
-  let container = $terminalBody.querySelector('.conv-stream');
+  let container = $terminalBody.querySelector('.worker-feed');
 
   if (v2FirstRender || !container) {
     // First load or container missing: full render
     $terminalBody.innerHTML = '';
-    container = document.createElement('div');
-    container.className = 'conv-stream';
-    $terminalBody.appendChild(container);
+    container = ensureWorkerFeedContainer();
+    v2ToolGroups.clear();
     for (const evt of events) {
-      appendRenderedEvent(container, renderV2Event(evt));
+      renderWorkerFeedEvent(evt, container);
     }
     v2LastCursor = v2EventSignature(events[events.length - 1]);
     v2FirstRender = false;
@@ -2270,14 +2357,15 @@ function renderV2AgentEvents(events) {
     if (cursorIdx === -1) {
       // Cursor not found (rotation/restart): full re-render
       container.innerHTML = '';
+      v2ToolGroups.clear();
       for (const evt of events) {
-        appendRenderedEvent(container, renderV2Event(evt));
+        renderWorkerFeedEvent(evt, container);
       }
     } else if (cursorIdx < events.length - 1) {
       // Append only new events after cursor
       const newEvents = events.slice(cursorIdx + 1);
       for (const evt of newEvents) {
-        appendRenderedEvent(container, renderV2Event(evt));
+        renderWorkerFeedEvent(evt, container);
       }
     } else {
       // No new events
@@ -2292,6 +2380,16 @@ function renderV2AgentEvents(events) {
     $terminalBody.scrollTop = $terminalBody.scrollHeight;
     requestAnimationFrame(() => { isProgrammaticScroll = false; });
   }
+}
+
+function ensureWorkerFeedContainer() {
+  let container = $terminalBody.querySelector('.worker-feed');
+  if (!container) {
+    container = document.createElement('div');
+    container.className = 'worker-feed';
+    $terminalBody.appendChild(container);
+  }
+  return container;
 }
 
 function appendRenderedEvent(container, rendered) {
@@ -2311,45 +2409,235 @@ function createConvOutputEvent(className, output, options = {}) {
 }
 
 function renderV2Event(evt) {
-  const ts = evt.ts ? new Date(evt.ts).toLocaleTimeString() : '';
-  const type = evt.type || 'unknown';
+  const container = document.createElement('div');
+  renderWorkerFeedEvent(evt, container);
+  return container.firstChild;
+}
 
-  switch (type) {
+function workerFeedTimestamp(evt) {
+  return evt.ts ? new Date(evt.ts).toLocaleTimeString() : '';
+}
+
+function createFeedEvent(evt, kind, label) {
+  const root = document.createElement('div');
+  root.className = `worker-feed-event worker-feed-${kind}`;
+  const meta = document.createElement('div');
+  meta.className = 'worker-feed-meta';
+  const ts = document.createElement('span');
+  ts.className = 'worker-feed-ts';
+  ts.textContent = workerFeedTimestamp(evt);
+  const labelEl = document.createElement('span');
+  labelEl.className = 'worker-feed-label';
+  labelEl.textContent = label;
+  meta.appendChild(ts);
+  meta.appendChild(labelEl);
+  const body = document.createElement('div');
+  body.className = 'worker-feed-body';
+  root.appendChild(meta);
+  root.appendChild(body);
+  return { root, body, meta, label: labelEl };
+}
+
+function appendTextBlock(parent, className, text) {
+  const block = document.createElement('div');
+  block.className = className;
+  block.textContent = String(text ?? '');
+  parent.appendChild(block);
+  return block;
+}
+
+function payloadText(payload, fields) {
+  for (const field of fields) {
+    const value = payload?.[field];
+    if (value != null && value !== '') return String(value);
+  }
+  return '';
+}
+
+function isFileTool(payload) {
+  const mode = payload?.displayMode;
+  const tool = String(payload?.tool || '').toLowerCase();
+  return mode === 'file' || mode === 'edit' || ['read', 'write', 'edit', 'multiedit', 'glob', 'grep'].some(name => tool.includes(name));
+}
+
+function toolLabel(payload) {
+  return String(payload?.tool || payload?.displayMode || 'tool');
+}
+
+function renderWorkerFeedEvent(evt, container) {
+  switch (evt.type || 'unknown') {
     case 'assistant_message':
-      return `<div class="conv-event conv-assistant"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">assistant</span><span class="conv-text">${escapeHtml((evt.payload?.text || '').slice(0, 2000))}</span></div>`;
+      container.appendChild(renderAssistantFeedEvent(evt));
+      return;
     case 'prompt_sent':
-      return `<div class="conv-event conv-user"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">user</span><span class="conv-text">${escapeHtml((evt.payload?.text || '').slice(0, 2000))}</span></div>`;
+      container.appendChild(renderPromptFeedEvent(evt));
+      return;
     case 'tool_call':
-      return `<div class="conv-event conv-tool"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">tool</span><span class="conv-text">${escapeHtml(evt.payload?.tool || type)} ${escapeHtml((evt.payload?.path || '').slice(0, 200))}</span></div>`;
-    case 'tool_result': {
-      const summary = String(evt.payload?.summary || '');
-      const output = summary.length > 500 ? `${summary.slice(0, 500)}…` : summary;
-      const wrapper = createConvOutputEvent('conv-event conv-tool-result', output);
-      const tsEl = document.createElement('span');
-      tsEl.className = 'conv-ts';
-      tsEl.textContent = ts;
-      const roleEl = document.createElement('span');
-      roleEl.className = 'conv-role';
-      roleEl.textContent = 'result';
-      wrapper.insertBefore(roleEl, wrapper.firstChild);
-      wrapper.insertBefore(tsEl, wrapper.firstChild);
-      return wrapper;
-    }
+      renderToolCallFeedEvent(evt, container);
+      return;
+    case 'tool_output_update':
+      renderToolOutputUpdateFeedEvent(evt, container);
+      return;
+    case 'tool_result':
+      renderToolResultFeedEvent(evt, container);
+      return;
+    case 'context_usage':
+    case 'context_pressure':
+    case 'retry_started':
+    case 'compaction_started':
+    case 'message_delivered':
+    case 'reply_sent':
+    case 'escalation_sent':
+    case 'exit_intercepted':
+      container.appendChild(renderStatusFeedEvent(evt));
+      return;
     case 'agent_started':
-      return `<div class="conv-event conv-lifecycle"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">▶</span><span class="conv-text">Agent started (${escapeHtml(evt.role || '')} lane ${evt.laneNumber ?? '?'})</span></div>`;
     case 'agent_exited':
-      return `<div class="conv-event conv-lifecycle"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">■</span><span class="conv-text">Agent exited (code ${evt.payload?.exitCode ?? '?'})</span></div>`;
     case 'agent_crashed':
     case 'agent_killed':
     case 'agent_timeout':
-      return `<div class="conv-event conv-lifecycle conv-error"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">⚠</span><span class="conv-text">${escapeHtml(type)} ${escapeHtml(evt.payload?.reason || '')}</span></div>`;
-    case 'message_delivered':
-      return `<div class="conv-event conv-steer"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">✉</span><span class="conv-text">Steering: ${escapeHtml((evt.payload?.content || '').slice(0, 500))}</span></div>`;
-    case 'context_pressure':
-      return `<div class="conv-event conv-lifecycle"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">⚠</span><span class="conv-text">Context pressure: ${evt.payload?.pct ?? '?'}%</span></div>`;
+      container.appendChild(renderLifecycleFeedEvent(evt));
+      return;
     default:
-      return `<div class="conv-event conv-lifecycle"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">•</span><span class="conv-text">${escapeHtml(type)}</span></div>`;
+      container.appendChild(renderUnknownFeedEvent(evt));
   }
+}
+
+function renderAssistantFeedEvent(evt) {
+  const payload = evt.payload || {};
+  const { root, body } = createFeedEvent(evt, 'assistant', 'assistant');
+  appendTextBlock(body, 'worker-feed-text', payloadText(payload, ['text', 'message']).slice(0, 2000));
+  return root;
+}
+
+function renderPromptFeedEvent(evt) {
+  const payload = evt.payload || {};
+  const { root, body } = createFeedEvent(evt, 'prompt', 'prompt');
+  appendTextBlock(body, 'worker-feed-prompt-text', payloadText(payload, ['text', 'prompt', 'content']).slice(0, 2000));
+  return root;
+}
+
+function renderToolCallFeedEvent(evt, container) {
+  const payload = evt.payload || {};
+  const group = createToolGroup(evt, payload);
+  container.appendChild(group.root);
+  if (payload.toolCallId) v2ToolGroups.set(String(payload.toolCallId), group);
+}
+
+function createToolGroup(evt, payload) {
+  const { root, body, label } = createFeedEvent(evt, isFileTool(payload) ? 'file-tool' : 'tool', toolLabel(payload));
+  root.classList.add('worker-feed-tool-group');
+  if (payload.isError) root.classList.add('worker-feed-error');
+  if (payload.toolCallId && root.dataset) root.dataset.toolCallId = String(payload.toolCallId);
+  label.textContent = isFileTool(payload) ? `file · ${toolLabel(payload)}` : toolLabel(payload);
+
+  const command = payloadText(payload, ['command', 'argsPreview']);
+  if (command) appendTextBlock(body, 'worker-feed-command', command);
+  if (payload.path) appendTextBlock(body, 'worker-feed-path', payload.path);
+  if (payload.toolCallId) appendTextBlock(body, 'worker-feed-tool-call-id', `id ${payload.toolCallId}`);
+  const snippet = payloadText(payload, ['snippet', 'diff', 'contentPreview']);
+  if (snippet) appendTextBlock(body, 'worker-feed-snippet', snippet);
+
+  return { root, body, output: null, status: label, payload };
+}
+
+function ensureToolGroupOutput(group, payload) {
+  if (group.output) return group.output;
+  group.output = createOutputBlock(payload || {}, { text: '' });
+  group.body.appendChild(group.output);
+  return group.output;
+}
+
+function renderToolOutputUpdateFeedEvent(evt, container) {
+  const payload = evt.payload || {};
+  const delta = String(payload.text ?? payload.outputDelta ?? '');
+  if (!delta && !payload.truncated) return;
+  const toolCallId = payload.toolCallId ? String(payload.toolCallId) : '';
+  const group = toolCallId ? v2ToolGroups.get(toolCallId) : null;
+  if (group) {
+    const output = ensureToolGroupOutput(group, { ...payload, text: '', outputDelta: '', output: '' });
+    appendOutputText(output, delta);
+    const badge = createTruncationBadge(payload);
+    if (badge) output.appendChild(badge);
+    return;
+  }
+  container.appendChild(renderUnpairedOutputBlock(evt, 'live output'));
+}
+
+function renderToolResultFeedEvent(evt, container) {
+  const payload = evt.payload || {};
+  const toolCallId = payload.toolCallId ? String(payload.toolCallId) : '';
+  const group = toolCallId ? v2ToolGroups.get(toolCallId) : null;
+  const output = payloadText(payload, ['text', 'outputDelta', 'output', 'summary']);
+  if (group) {
+    if (payload.isError) group.root.classList.add('worker-feed-error');
+    group.status.textContent = payload.isError ? `${toolLabel(payload)} failed` : `${toolLabel(payload)} complete`;
+    if (output) {
+      const block = ensureToolGroupOutput(group, { ...payload, output: '' });
+      if (payload.isError === true) block.classList.add('worker-feed-output-error');
+      if (payload.text != null || payload.output != null) replaceOutputText(block, output);
+      else appendOutputText(block, output);
+      const badge = createTruncationBadge(payload);
+      if (badge) block.appendChild(badge);
+    } else {
+      appendTextBlock(group.body, 'worker-feed-status-text', payload.isError ? 'failed' : 'complete');
+    }
+    return;
+  }
+  container.appendChild(renderUnpairedOutputBlock(evt, payload.isError ? 'tool failed' : 'tool result'));
+}
+
+function renderUnpairedOutputBlock(evt, label) {
+  const payload = evt.payload || {};
+  const { root, body } = createFeedEvent(evt, 'tool-result', label);
+  if (payload.isError) root.classList.add('worker-feed-error');
+  const context = [toolLabel(payload), payload.command, payload.path, payload.argsPreview, payload.toolCallId ? `id ${payload.toolCallId}` : '']
+    .filter(Boolean)
+    .join(' · ');
+  if (context) appendTextBlock(body, 'worker-feed-context', context);
+  const output = payloadText(payload, ['text', 'outputDelta', 'output', 'summary']);
+  if (output) body.appendChild(createOutputBlock({ ...payload, output }));
+  return root;
+}
+
+function renderStatusFeedEvent(evt) {
+  const payload = evt.payload || {};
+  const labels = {
+    context_usage: 'context usage',
+    context_pressure: 'context pressure',
+    retry_started: 'retry started',
+    compaction_started: 'compaction started',
+    message_delivered: 'message delivered',
+    reply_sent: 'reply sent',
+    escalation_sent: 'escalation sent',
+    exit_intercepted: 'exit intercepted',
+  };
+  const { root, body } = createFeedEvent(evt, 'status', labels[evt.type] || evt.type || 'status');
+  const details = payloadText(payload, ['message', 'content', 'reason', 'summary']) || (payload.pct != null ? `${payload.pct}%` : '');
+  appendTextBlock(body, 'worker-feed-status-text', details);
+  return root;
+}
+
+function renderLifecycleFeedEvent(evt) {
+  const payload = evt.payload || {};
+  const labels = {
+    agent_started: 'agent started',
+    agent_exited: 'agent exited',
+    agent_crashed: 'agent crashed',
+    agent_killed: 'agent killed',
+    agent_timeout: 'agent timeout',
+  };
+  const { root, body } = createFeedEvent(evt, 'lifecycle', labels[evt.type] || evt.type || 'lifecycle');
+  if (evt.type === 'agent_crashed' || evt.type === 'agent_killed' || evt.type === 'agent_timeout') root.classList.add('worker-feed-error');
+  const details = payloadText(payload, ['reason', 'message']) || (payload.exitCode != null ? `exit code ${payload.exitCode}` : '');
+  appendTextBlock(body, 'worker-feed-status-text', details);
+  return root;
+}
+
+function renderUnknownFeedEvent(evt) {
+  const { root, body } = createFeedEvent(evt, 'unknown', evt.type || 'event');
+  appendTextBlock(body, 'worker-feed-status-text', JSON.stringify(evt.payload || {}).slice(0, 500));
+  return root;
 }
 
 // ── Segment-Scoped STATUS.md Helpers (TP-176) ──────────────────────────────
@@ -2729,10 +3017,10 @@ function closeViewer() {
   viewerMode = null;
   viewerTarget = null;
   viewerV2AgentId = null;
+  viewerWorkerFeedContext = null;
   autoScrollOn = false;
   convRenderedLines = 0;
-  v2LastCursor = null;
-  v2FirstRender = true;
+  resetV2FeedState();
   lastStatusMdText = '';
   $terminalPanel.style.display = 'none';
   $terminalBody.innerHTML = '';
@@ -2743,6 +3031,7 @@ $terminalClose.addEventListener('click', closeViewer);
 // Make viewer functions available globally for onclick handlers
 window.viewConversation = viewConversation;
 window.viewStatusMd = viewStatusMd;
+window.openHistoricalWorkerFeed = openHistoricalWorkerFeed;
 
 // ─── History ────────────────────────────────────────────────────────────────
 
@@ -2794,7 +3083,12 @@ function viewHistoryEntry(batchId) {
   if (!batchId) {
     viewingHistoryId = null;
     $historyPanel.style.display = "none";
+    resetV2FeedState();
     return;
+  }
+  if (viewingHistoryId && viewingHistoryId !== batchId) {
+    if (viewerWorkerFeedContext) closeViewer();
+    resetV2FeedState();
   }
   viewingHistoryId = batchId;
   fetch(`/api/history/${encodeURIComponent(batchId)}`)
@@ -2814,6 +3108,10 @@ function viewHistoryEntry(batchId) {
 }
 
 /** Render a full batch history summary. */
+function historyTaskAgentId(task) {
+  return task.agentId || task.workerAgentId || task.runtimeAgentId || task.runtime?.agentId || task.worker?.agentId || null;
+}
+
 function renderHistorySummary(entry) {
   const startDate = new Date(entry.startedAt).toLocaleString();
   const endDate = entry.endedAt ? new Date(entry.endedAt).toLocaleString() : "—";
@@ -2888,13 +3186,17 @@ function renderHistorySummary(entry) {
   if (entry.tasks && entry.tasks.length > 0) {
     html += `<div class="history-section-title">Tasks</div>`;
     html += `<table class="history-tasks-table"><thead><tr>
-      <th>Task</th><th>Status</th><th>Wave</th><th>Lane</th><th>Duration</th><th>Tokens</th><th>Cost</th><th>Exit</th>
+      <th>Task</th><th>Status</th><th>Wave</th><th>Lane</th><th>Duration</th><th>Tokens</th><th>Cost</th><th>Exit</th><th>Feed</th>
     </tr></thead><tbody>`;
     for (const t of entry.tasks) {
       const tTok = t.tokens || {};
       const tTotalIn = (tTok.input || 0) + (tTok.cacheRead || 0);
       let tTokenStr = `↑${formatTokens(tTotalIn)} ↓${formatTokens(tTok.output || 0)}`;
       const statusCls = `status-${t.status}`;
+      const agentId = historyTaskAgentId(t);
+      const feedAction = agentId
+        ? `<button type="button" class="history-worker-feed-btn" onclick="openHistoricalWorkerFeed(${escapeHtml(JSON.stringify(String(entry.batchId)))},${escapeHtml(JSON.stringify(String(agentId)))},${escapeHtml(JSON.stringify(String(t.taskId)))})">Worker feed</button>`
+        : "—";
       html += `<tr>
         <td>${escapeHtml(t.taskId)}</td>
         <td><span class="status-badge ${statusCls}">${t.status}</span></td>
@@ -2904,6 +3206,7 @@ function renderHistorySummary(entry) {
         <td>${tTokenStr}</td>
         <td style="color:var(--yellow)">${formatCost(tTok.costUsd || 0)}</td>
         <td style="font-size:0.8rem;color:var(--text-muted)">${t.exitReason ? escapeHtml(t.exitReason) : "—"}</td>
+        <td>${feedAction}</td>
       </tr>`;
     }
     html += `</tbody></table>`;
@@ -2920,6 +3223,8 @@ $historySelect.addEventListener("change", (e) => {
   } else {
     // Switched to "History ▾" — go back to live view or latest
     viewingHistoryId = null;
+    if (viewerWorkerFeedContext?.historical) closeViewer();
+    resetV2FeedState();
     $historyPanel.style.display = "none";
   }
 });
