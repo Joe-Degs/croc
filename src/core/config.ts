@@ -274,7 +274,7 @@ export function createDefaultConfig(cwd: string): CrocConfig {
 			worktreePrefix: "taskplane-wt",
 			sessionPrefix: "croc",
 			integration: "manual",
-			workerModel: "hubtel/grm-2.6-plus",
+			workerModel: "",
 			reviewerModel: "",
 			mergeModel: "",
 			supervisorModel: "hubtel/grm-2.6-plus",

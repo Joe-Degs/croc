@@ -334,9 +334,40 @@ Expected improvement:
 - Croc should have a preflight check for Docker availability when task packets require Docker-first verification.
 - If Docker is unavailable, Croc could mark it in generated context before workers spend time trying Docker commands.
 
+### 2026-06-06, vendored Taskplane child-agent resource propagation
+
+- Croc now vendors Taskplane under `packages/taskplane` as a git subtree and resolves the bundled package from source checkouts.
+- The Croc-local Taskplane patch reads Pi `packages`, explicit `extensions`, and `skills` from project/global settings, then forwards them to worker, reviewer, and merge child agents.
+- Relative extension/skill paths are rebased from their settings directory before forwarding, and filtered package objects are not expanded into unfiltered package extension flags.
+- Child agents still run with `--no-extensions` and `--no-skills`, but now receive explicit `-e` and `--skill` flags for configured resources.
+- Croc now removes stale generated Taskplane package and provider extension paths from `.pi/settings.json` before adding the current bundled paths, so running from a worktree does not leave old Croc-root resources alongside current ones.
+- A disposable fake-Pi E2E proved project/global resource merging, dedupe, exclusions, package object sources, and worker/reviewer/merge forwarding through real Croc and Taskplane runtime entrypoints.
+- A disposable real-Pi E2E using global Pi config proved worker, reviewer, and merge child agents loaded a project-local probe extension and skill.
+- The real-Pi probe confirmed worker/reviewer/merge model inheritance: each child argv had no `--model` flag, while Croc keeps the supervisor model explicit.
+- Croc now defaults `taskplane.workerModel` to empty and generated Taskplane config no longer falls back to `pi.model` for the worker.
+- Root Croc regression coverage now asserts the generated config leaves worker, reviewer, and merge models empty while pinning supervisor to `hubtel/grm-2.6-plus`.
+
+Verification:
+- Root `npm test` passed.
+- Root `npm run check` passed.
+- Root `npm run build` passed.
+- Movie Night `croc doctor` passed.
+- Taskplane focused resource/timeout tests passed earlier in the patch cycle.
+
+### 2026-06-06, real worker web_search proof
+
+- Created a disposable real Croc project at `/var/folders/_9/345_2pfn4ml4pwgdf0zmhsvm0000gp/T/opencode/croc-real-web-search-worker-20260606` using a normal `croc.yaml`, tmux runtime, workspace-create repo, and `batteries.webSearch.enabled: true`.
+- Ran `croc apply`, `croc doctor`, and `croc start all` from the Croc worktree, using the real global Pi model/provider config under `~/.pi/agent`.
+- Generated Taskplane config gave the worker `read,write,edit,bash,grep,find,ls,web_search,web_fetch` and left worker/reviewer/merge models empty for inheritance.
+- Parent Pi startup loaded `@juicesharp/rpiv-web-tools`, `provider.js`, and `task-orchestrator.ts`; model display showed Worker/Reviewer/Merger inherit to `hubtel/grm-2.6-plus`.
+- The actual worker event log recorded a real `tool_call` for `web_search` with query `official Kubernetes documentation home page`, followed by a `tool_result` for `web_search`.
+- The worker created `web-search-proof.md` on `orch/hubteluser-20260606T030729` with `https://kubernetes.io/docs/home/` and the required sentence `web_search was used by this worker`.
+- Batch `20260606T030729` completed successfully with 1/1 tasks succeeded and 0 failures/skips/blocks.
+- The disposable tmux session `croc-real-web-search-worker-20260606` was stopped after proof collection to prevent extra supervisor actions.
+
 ## Current risks
 
-- Web search is now configured for future Taskplane workers, but this completed batch did not prove an actual `web_search`/`web_fetch` call.
+- Web search is configured for future Taskplane workers and child-agent resource propagation is proved by synthetic probes, but the completed Movie Night batch did not include an actual `web_search`/`web_fetch` call.
 - Docker build/run remains unverified because the Docker daemon was unavailable; only local npm checks and `docker compose config` were verified after integration.
 - Dashboard stale PID handling hides root-cause stderr.
 - Worker used several shell truncation helpers (`tail`, `head`) in commands; acceptable for Taskplane worker today, but it means event logs hide full command output.
@@ -351,7 +382,7 @@ Expected improvement:
 - Add dashboard log file capture for stdout/stderr.
 - Add dashboard port ownership diagnostics before start.
 - Add web-tool worker availability check to `croc doctor` or a generated smoke packet.
-- Add a durable upstream/vendor path for the Taskplane child-agent resource propagation patch instead of relying on a local bundled package edit.
+- Decide whether to upstream the Croc-local Taskplane child-agent resource propagation patch.
 - Add first-class `docs` references in Croc work packets with explicit allowed lookup mechanisms.
 - Add a generated observability checklist for each Croc run.
 - Add TanStack Router/Biome v2 generated-route guidance to the frontend or Croc workflow skill.

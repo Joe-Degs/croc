@@ -15,6 +15,22 @@ function addUniquePackage(packages: PackageSource[], source: string): PackageSou
 	return [...packages, source];
 }
 
+function normalizedSource(source: string): string {
+	return source.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+function isTaskplanePackageSource(source: string): boolean {
+	const bare = normalizedSource(source)
+		.replace(/^(?:npm:|file:|git:(?:github\.com\/[^/]+\/)?)/, "")
+		.toLowerCase();
+	return bare === "taskplane" || bare.endsWith("/taskplane");
+}
+
+function isCrocProviderExtensionPath(path: string): boolean {
+	const normalized = normalizedSource(path);
+	return normalized.endsWith("/dist/extensions/provider.js") || normalized.endsWith("/src/extensions/provider.ts");
+}
+
 function resolveTaskplanePackageSource(config: CrocConfig, bundledTaskplanePackagePath: string): string {
 	if (config.taskplane.packageSource === "bundled") {
 		return bundledTaskplanePackagePath;
@@ -59,8 +75,8 @@ export function writePiSettings(
 ): string {
 	const path = getPiSettingsPath(cwd);
 	const settings = readJsonObject(path);
-	let packages = readPackageArray(settings.packages);
-	let extensions = readStringArray(settings.extensions);
+	let packages = readPackageArray(settings.packages).filter((entry) => !isTaskplanePackageSource(packageKey(entry)));
+	let extensions = readStringArray(settings.extensions).filter((entry) => !isCrocProviderExtensionPath(entry));
 
 	if (config.taskplane.enabled) {
 		packages = addUniquePackage(packages, resolveTaskplanePackageSource(config, bundledTaskplanePackagePath));

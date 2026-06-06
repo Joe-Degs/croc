@@ -81,7 +81,7 @@ import {
 } from "./verification.ts";
 import { spawnAgent } from "./agent-host.ts";
 import type { AgentHostOptions, AgentHostResult, AgentTelemetryCallback } from "./agent-host.ts";
-import { loadPiSettingsPackages, filterExcludedExtensions } from "./settings-loader.ts";
+import { loadPiSettingsResources, filterExcludedExtensions } from "./settings-loader.ts";
 import type { RuntimeBackend } from "./execution.ts";
 import type { VerificationBaseline, FingerprintDiff, TestFingerprint } from "./verification.ts";
 
@@ -819,11 +819,14 @@ export async function spawnMergeAgentV2(
 		mkdirSync(join(mailboxDir, "inbox"), { recursive: true });
 	}
 
-	// TP-180: Forward user-installed extensions to merge agent
+	// TP-180/TP-199: Forward settings resources to merge agent
 	const mergeStateRoot = stateRoot ?? repoRoot;
-	const allMergePackages = loadPiSettingsPackages(mergeStateRoot);
+	const settingsResources = loadPiSettingsResources(mergeStateRoot);
 	const mergeExclusions = config.merge.exclude_extensions ?? [];
-	const mergePackages = filterExcludedExtensions(allMergePackages, mergeExclusions);
+	const mergeExtensions = filterExcludedExtensions(
+		[...settingsResources.extensions, ...settingsResources.packages],
+		mergeExclusions,
+	);
 
 	const opts: AgentHostOptions = {
 		agentId: sessionName,
@@ -844,7 +847,8 @@ export async function spawnMergeAgentV2(
 		timeoutMs: (config.merge.timeout_minutes ?? 10) * 60 * 1000,
 		stateRoot: mergeStateRoot,
 		packet: null,
-		...(mergePackages.length > 0 ? { extensions: mergePackages } : {}),
+		...(mergeExtensions.length > 0 ? { extensions: mergeExtensions } : {}),
+		...(settingsResources.skills.length > 0 ? { skills: settingsResources.skills } : {}),
 		env: {
 			ORCH_BATCH_ID: bid,
 		},

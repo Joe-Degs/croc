@@ -39,7 +39,7 @@ import {
 	type AgentHostOptions,
 	type AgentHostResult,
 } from "./agent-host.ts";
-import { loadPiSettingsPackages, filterExcludedExtensions } from "./settings-loader.ts";
+import { loadPiSettingsResources, filterExcludedExtensions } from "./settings-loader.ts";
 
 import { appendAgentEvent, writeLaneSnapshot } from "./process-registry.ts";
 
@@ -724,10 +724,10 @@ export async function executeTaskV2(
 		);
 		const bridgeExtensionPath = join(LANE_RUNNER_DIR, "agent-bridge-extension.ts");
 
-		// TP-180: Forward user-installed extensions to worker agent
-		const allPackages = loadPiSettingsPackages(config.stateRoot);
-		const workerPackages = filterExcludedExtensions(
-			allPackages,
+		// TP-180/TP-199: Forward settings resources to worker agent.
+		const settingsResources = loadPiSettingsResources(config.stateRoot);
+		const workerExtensions = filterExcludedExtensions(
+			[...settingsResources.extensions, ...settingsResources.packages],
 			config.workerExcludeExtensions ?? [],
 		);
 
@@ -758,7 +758,8 @@ export async function executeTaskV2(
 			timeoutMs: config.maxWorkerMinutes * 60_000,
 			stateRoot: config.stateRoot,
 			packet: unit.packet,
-			extensions: [bridgeExtensionPath, ...workerPackages],
+			extensions: [bridgeExtensionPath, ...workerExtensions],
+			skills: settingsResources.skills,
 			env: {
 				TASKPLANE_OUTBOX_DIR: outboxDir,
 				TASKPLANE_AGENT_ID: workerAgentId,

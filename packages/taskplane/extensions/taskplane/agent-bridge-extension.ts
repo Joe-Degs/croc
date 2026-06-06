@@ -27,7 +27,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync, renameSync, unlinkS
 import { join, dirname } from "path";
 import { spawn as nodeSpawn } from "child_process";
 import { resolvePiCliPath, resolveTaskplaneAgentTemplate } from "./path-resolver.ts";
-import { loadPiSettingsPackages, filterExcludedExtensions } from "./settings-loader.ts";
+import { loadPiSettingsResources, filterExcludedExtensions } from "./settings-loader.ts";
 import { randomBytes } from "crypto";
 import { buildExpansionRequestId, type SegmentExpansionRequest } from "./types.ts";
 
@@ -607,11 +607,11 @@ export default function (pi: ExtensionAPI) {
 			if (reviewerModel) args.push("--model", reviewerModel);
 			if (reviewerThinking) args.push("--thinking", reviewerThinking);
 
-			// TP-180: Forward user-installed extensions to reviewer agent
+			// TP-180/TP-199: Forward settings resources to reviewer agent
 			// Use TASKPLANE_STATE_ROOT (canonical project root) for settings resolution,
 			// falling back to cwd (which may be a worktree without .pi/settings.json).
 			const settingsRoot = process.env.TASKPLANE_STATE_ROOT || cwd;
-			const reviewerPackages = loadPiSettingsPackages(settingsRoot);
+			const settingsResources = loadPiSettingsResources(settingsRoot);
 			// Apply reviewer-specific exclusions from config (JSON array via env)
 			let reviewerExclusions: string[] = [];
 			try {
@@ -625,9 +625,15 @@ export default function (pi: ExtensionAPI) {
 			} catch {
 				/* ignore malformed */
 			}
-			const filteredReviewerPackages = filterExcludedExtensions(reviewerPackages, reviewerExclusions);
-			for (const pkg of filteredReviewerPackages) {
-				args.push("-e", pkg);
+			const filteredReviewerExtensions = filterExcludedExtensions(
+				[...settingsResources.extensions, ...settingsResources.packages],
+				reviewerExclusions,
+			);
+			for (const extension of filteredReviewerExtensions) {
+				args.push("-e", extension);
+			}
+			for (const skill of settingsResources.skills) {
+				args.push("--skill", skill);
 			}
 			const proc = nodeSpawn(process.execPath, args, {
 				shell: false,
@@ -647,6 +653,7 @@ export default function (pi: ExtensionAPI) {
 			let contextPct = 0;
 			let stdoutBuf = "";
 			let finalized = false;
+			let reviewerTimeout: ReturnType<typeof setTimeout> | undefined;
 
 			const emitState = (status: "running" | "done" | "error") => {
 				try {
@@ -687,6 +694,7 @@ export default function (pi: ExtensionAPI) {
 			const finalize = (code: number) => {
 				if (finalized) return;
 				finalized = true;
+				if (reviewerTimeout) clearTimeout(reviewerTimeout);
 				emitState(code === 0 ? "done" : "error");
 				resolve(code);
 			};
@@ -765,7 +773,7 @@ export default function (pi: ExtensionAPI) {
 			proc.on("error", () => finalize(1));
 
 			// Timeout: 10 minutes
-			setTimeout(
+			reviewerTimeout = setTimeout(
 				() => {
 					try {
 						proc.kill("SIGTERM");

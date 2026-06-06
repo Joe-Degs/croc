@@ -19,11 +19,13 @@ Local Croc changes should be recorded here so upstream drift is easy to review.
 
 ## Current Croc-local changes
 
-- none yet, beyond including this patch ledger and executable mode on `bin/taskplane.mjs`
+- `settings-loader.ts` reads Pi `packages`, explicit `extensions`, and `skills` from project and global settings. Relative extension/skill paths are rebased from their settings directory. Package object entries with `extensions` filters are not expanded into unfiltered package `-e` flags. Worker, reviewer, and merge child agents forward packages/extensions with `-e` and skills with `--skill` while still disabling auto-discovery.
+- `agent-bridge-extension.ts` clears the reviewer child-process timeout when the reviewer exits, preventing reviewed worker sessions from lingering on the 10-minute timer.
+- Croc's `writePiSettings` reconciles stale generated Taskplane package and provider extension paths before adding the current bundled paths, preventing duplicate old/new Croc resources from being forwarded to child agents.
+- patch ledger and executable mode on `bin/taskplane.mjs`
 
 ## Planned Croc-local changes
 
-- child-agent resource propagation
 - stale generated packet folder reconciliation
 - duplicate task-id detection before orchestration starts
 - better progress accounting for source churn without checkbox movement

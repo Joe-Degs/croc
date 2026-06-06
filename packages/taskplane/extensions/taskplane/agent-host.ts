@@ -215,6 +215,8 @@ export interface AgentHostOptions {
 	thinking?: string;
 	/** Extension paths to load */
 	extensions?: string[];
+	/** Skill paths to load */
+	skills?: string[];
 	/** Mailbox directory for steering (null = no mailbox) */
 	mailboxDir?: string | null;
 	/** Steering-pending JSONL path (TP-090, worker-only) */
@@ -367,6 +369,11 @@ export function spawnAgent(
 		}
 	}
 	piArgs.push("--no-skills");
+	if (opts.skills && opts.skills.length > 0) {
+		for (const skill of opts.skills) {
+			piArgs.push("--skill", skill);
+		}
+	}
 	if (opts.thinking) piArgs.push("--thinking", opts.thinking);
 
 	// Spawn directly — no shell, no terminal multiplexer

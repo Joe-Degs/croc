@@ -14,9 +14,15 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import { strict as assert } from "node:assert";
 import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
 import { join } from "path";
-import { tmpdir } from "os";
+import { homedir, tmpdir } from "os";
 
-import { loadPiSettingsPackages, filterExcludedExtensions } from "../taskplane/settings-loader.ts";
+import {
+	loadPiSettingsPackages,
+	loadPiSettingsResources,
+	loadPiSettingsExtensions,
+	loadPiSettingsSkills,
+	filterExcludedExtensions,
+} from "../taskplane/settings-loader.ts";
 
 // ── Test Helpers ─────────────────────────────────────────────────────
 
@@ -35,16 +41,29 @@ function writeProjectSettings(root: string, data: unknown): void {
 	writeFileSync(join(dir, "settings.json"), JSON.stringify(data), "utf-8");
 }
 
+function writeAgentSettings(root: string, data: unknown): void {
+	mkdirSync(root, { recursive: true });
+	writeFileSync(join(root, "settings.json"), JSON.stringify(data), "utf-8");
+}
+
 // ── Tests ────────────────────────────────────────────────────────────
 
 describe("loadPiSettingsPackages", () => {
 	let tempDir: string;
+	let previousAgentDir: string | undefined;
 
 	beforeEach(() => {
 		tempDir = createTempDir();
+		previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = join(tempDir, "agent");
 	});
 
 	afterEach(() => {
+		if (previousAgentDir === undefined) {
+			delete process.env.PI_CODING_AGENT_DIR;
+		} else {
+			process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		}
 		if (existsSync(tempDir)) {
 			rmSync(tempDir, { recursive: true, force: true });
 		}
@@ -126,6 +145,86 @@ describe("loadPiSettingsPackages", () => {
 		});
 		const result = loadPiSettingsPackages(tempDir);
 		assert.ok(Array.isArray(result));
+	});
+
+	it("reads package object sources from settings", () => {
+		writeProjectSettings(tempDir, {
+			packages: [{ source: "npm:pi-sage" }, { source: "npm:taskplane" }, { notSource: "ignored" }],
+		});
+		const result = loadPiSettingsPackages(tempDir);
+		assert.deepEqual(result, ["npm:pi-sage"]);
+	});
+
+	it("does not expand package object extension filters as unfiltered package sources", () => {
+		writeProjectSettings(tempDir, {
+			packages: [
+				{ source: "npm:pi-sage", extensions: ["chosen-extension"] },
+				{ source: "npm:pi-memory", skills: ["chosen-skill"] },
+			],
+		});
+		const result = loadPiSettingsPackages(tempDir);
+		assert.deepEqual(result, ["npm:pi-memory"]);
+	});
+
+	it("reads project and global explicit extensions and skills", () => {
+		const agentDir = process.env.PI_CODING_AGENT_DIR;
+		assert.ok(agentDir);
+		writeProjectSettings(tempDir, {
+			packages: ["npm:pi-sage"],
+			extensions: ["/project/extension.ts", "/shared/extension.ts"],
+			skills: ["/project/skill.md", "/shared/skill.md"],
+		});
+		writeAgentSettings(agentDir, {
+			packages: ["npm:pi-memory", "npm:pi-sage"],
+			extensions: ["/global/extension.ts", "/shared/extension.ts"],
+			skills: ["/global/skill.md", "/shared/skill.md"],
+		});
+
+		const result = loadPiSettingsResources(tempDir);
+
+		assert.deepEqual(result, {
+			packages: ["npm:pi-sage", "npm:pi-memory"],
+			extensions: ["/project/extension.ts", "/shared/extension.ts", "/global/extension.ts"],
+			skills: ["/project/skill.md", "/shared/skill.md", "/global/skill.md"],
+		});
+		assert.deepEqual(loadPiSettingsExtensions(tempDir), result.extensions);
+		assert.deepEqual(loadPiSettingsSkills(tempDir), result.skills);
+	});
+
+	it("resolves relative project and global extension and skill paths from their settings directories", () => {
+		const agentDir = process.env.PI_CODING_AGENT_DIR;
+		assert.ok(agentDir);
+		writeProjectSettings(tempDir, {
+			extensions: ["extensions/project-extension.ts"],
+			skills: ["skills/project-skill.md"],
+		});
+		writeAgentSettings(agentDir, {
+			extensions: ["extensions/global-extension.ts"],
+			skills: ["skills/global-skill.md"],
+		});
+
+		const result = loadPiSettingsResources(tempDir);
+
+		assert.deepEqual(result.extensions, [
+			join(tempDir, ".pi", "extensions", "project-extension.ts"),
+			join(agentDir, "extensions", "global-extension.ts"),
+		]);
+		assert.deepEqual(result.skills, [
+			join(tempDir, ".pi", "skills", "project-skill.md"),
+			join(agentDir, "skills", "global-skill.md"),
+		]);
+	});
+
+	it("resolves tilde extension and skill paths like Pi settings", () => {
+		writeProjectSettings(tempDir, {
+			extensions: ["~/pi-extension.ts"],
+			skills: ["~/pi-skill.md"],
+		});
+
+		const result = loadPiSettingsResources(tempDir);
+
+		assert.deepEqual(result.extensions, [join(homedir(), "pi-extension.ts")]);
+		assert.deepEqual(result.skills, [join(homedir(), "pi-skill.md")]);
 	});
 });
 

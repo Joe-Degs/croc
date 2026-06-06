@@ -165,6 +165,21 @@ function withTaskFolder(
 }
 
 describe("TP-189-A2 — review_step death-spiral guard runtime behavior", () => {
+	it("spawnReviewer clears its timeout after the reviewer process exits", () => {
+		const bridgeSource = readFileSync(
+			new URL("../taskplane/agent-bridge-extension.ts", import.meta.url),
+			"utf-8",
+		);
+		assert.ok(
+			bridgeSource.includes("let reviewerTimeout: ReturnType<typeof setTimeout> | undefined"),
+			"spawnReviewer should keep a handle to its timeout",
+		);
+		assert.ok(
+			bridgeSource.includes("if (reviewerTimeout) clearTimeout(reviewerTimeout);"),
+			"spawnReviewer finalize() should clear the timeout so worker processes can exit promptly",
+		);
+	});
+
 	it("type='code' on a step marked Complete → returns REFUSED without spawning a reviewer", async () => {
 		const { statusPath, cleanupEnv } = withTaskFolder(2, "✅ Complete");
 		spawnCallCount = 0;

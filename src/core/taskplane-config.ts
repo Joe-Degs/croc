@@ -46,7 +46,7 @@ export function buildTaskplaneConfig(config: CrocConfig): Record<string, unknown
 			},
 			standardsOverrides: {},
 			worker: {
-				model: taskplane.workerModel || config.pi.model,
+				model: taskplane.workerModel,
 				tools: toolsFor(config, DEFAULT_TOOLS),
 				thinking: taskplane.workerThinking,
 				excludeExtensions: [],
