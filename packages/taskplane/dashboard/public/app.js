@@ -35,9 +35,163 @@ function pctClass(pct) {
 }
 
 function escapeHtml(str) {
-  const div = document.createElement("div");
-  div.textContent = str;
-  return div.innerHTML;
+  return String(str ?? "").replace(/[&<>"'`]/g, (ch) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+    "`": "&#96;",
+  })[ch]);
+}
+
+const ANSI_FG_CLASSES = {
+  30: "ansi-fg-black",
+  31: "ansi-fg-red",
+  32: "ansi-fg-green",
+  33: "ansi-fg-yellow",
+  34: "ansi-fg-blue",
+  35: "ansi-fg-magenta",
+  36: "ansi-fg-cyan",
+  37: "ansi-fg-white",
+  90: "ansi-fg-bright-black",
+  91: "ansi-fg-bright-red",
+  92: "ansi-fg-bright-green",
+  93: "ansi-fg-bright-yellow",
+  94: "ansi-fg-bright-blue",
+  95: "ansi-fg-bright-magenta",
+  96: "ansi-fg-bright-cyan",
+  97: "ansi-fg-bright-white",
+};
+
+function stripUnsupportedAnsiControls(text) {
+  return String(text ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")
+    .replace(/\x9d[\s\S]*?(?:\x07|\x9c|\x1b\\)/g, "")
+    .replace(/\x1b\[(?![0-9;]*m)[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\x9b[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b(?!\[|\])[\x20-\x2f]*[\x30-\x7e]/g, "")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f-\x9f]/g, "");
+}
+
+function ansiStateClasses(state) {
+  const classes = [];
+  if (state.bold) classes.push("ansi-bold");
+  if (state.dim) classes.push("ansi-dim");
+  if (state.fg) classes.push(state.fg);
+  return classes;
+}
+
+function appendAnsiChunk(parent, text, state) {
+  if (!text) return;
+  const classes = ansiStateClasses(state);
+  if (classes.length === 0) {
+    parent.appendChild(document.createTextNode(text));
+    return;
+  }
+  const span = document.createElement("span");
+  span.className = classes.join(" ");
+  span.textContent = text;
+  parent.appendChild(span);
+}
+
+function applyAnsiSgr(state, params) {
+  const codes = params === "" ? [0] : params.split(";").map((part) => Number(part || 0));
+  for (const code of codes) {
+    if (!Number.isFinite(code)) continue;
+    if (code === 0) {
+      state.bold = false;
+      state.dim = false;
+      state.fg = "";
+    } else if (code === 1) {
+      state.bold = true;
+      state.dim = false;
+    } else if (code === 2) {
+      state.dim = true;
+      state.bold = false;
+    } else if (code === 22) {
+      state.bold = false;
+      state.dim = false;
+    } else if (code === 39) {
+      state.fg = "";
+    } else if (ANSI_FG_CLASSES[code]) {
+      state.fg = ANSI_FG_CLASSES[code];
+    }
+  }
+}
+
+function appendAnsiText(parent, text) {
+  const clean = stripUnsupportedAnsiControls(text);
+  const state = { bold: false, dim: false, fg: "" };
+  const sgr = /\x1b\[([0-9;]*)m/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = sgr.exec(clean)) !== null) {
+    appendAnsiChunk(parent, clean.slice(lastIndex, match.index), state);
+    applyAnsiSgr(state, match[1]);
+    lastIndex = sgr.lastIndex;
+  }
+  appendAnsiChunk(parent, clean.slice(lastIndex), state);
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  let unit = units[0];
+  for (let i = 1; i < units.length && value >= 1024; i++) {
+    value /= 1024;
+    unit = units[i];
+  }
+  const display = value >= 10 || Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1);
+  return `${display} ${unit}`;
+}
+
+function outputByteLength(text) {
+  const value = String(text ?? "");
+  if (typeof TextEncoder !== "undefined") return new TextEncoder().encode(value).length;
+  return value.length;
+}
+
+function formatTruncationLabel(payload) {
+  if (!payload || payload.truncated !== true) return "";
+  const originalBytes = Number(payload.originalBytes);
+  if (!Number.isFinite(originalBytes) || originalBytes <= 0) return "output truncated";
+  const visibleText = payload.output ?? payload.outputDelta ?? "";
+  const visibleBytes = outputByteLength(visibleText);
+  if (visibleBytes > 0 && visibleBytes < originalBytes) {
+    return `${formatBytes(visibleBytes)} captured of ${formatBytes(originalBytes)}`;
+  }
+  return `output truncated from ${formatBytes(originalBytes)}`;
+}
+
+function createTruncationBadge(payload) {
+  const label = formatTruncationLabel(payload);
+  if (!label) return null;
+  const badge = document.createElement("span");
+  badge.className = "worker-feed-truncated";
+  badge.textContent = label;
+  return badge;
+}
+
+function createOutputBlock(payload, options = {}) {
+  const text = payload?.output ?? payload?.outputDelta ?? options.text ?? "";
+  const block = document.createElement("div");
+  block.className = "worker-feed-output";
+  if (payload?.isError || options.isError) block.classList.add("worker-feed-output-error");
+
+  const pre = document.createElement("pre");
+  pre.className = "worker-feed-output-pre";
+  appendAnsiText(pre, text);
+  block.appendChild(pre);
+
+  const badge = createTruncationBadge(payload);
+  if (badge) block.appendChild(badge);
+
+  return block;
 }
 
 /** Format token count as human-readable (e.g., 1.2k, 45k, 1.2M). */
@@ -2052,8 +2206,7 @@ function pollConversation() {
       for (const line of newLines) {
         try {
           const event = JSON.parse(line);
-          const html = renderConvEvent(event);
-          if (html) container.insertAdjacentHTML('beforeend', html);
+          appendRenderedEvent(container, renderConvEvent(event));
         } catch { continue; }
       }
 
@@ -2098,8 +2251,7 @@ function renderV2AgentEvents(events) {
     container.className = 'conv-stream';
     $terminalBody.appendChild(container);
     for (const evt of events) {
-      const html = renderV2Event(evt);
-      if (html) container.insertAdjacentHTML('beforeend', html);
+      appendRenderedEvent(container, renderV2Event(evt));
     }
     v2LastCursor = v2EventSignature(events[events.length - 1]);
     v2FirstRender = false;
@@ -2119,15 +2271,13 @@ function renderV2AgentEvents(events) {
       // Cursor not found (rotation/restart): full re-render
       container.innerHTML = '';
       for (const evt of events) {
-        const html = renderV2Event(evt);
-        if (html) container.insertAdjacentHTML('beforeend', html);
+        appendRenderedEvent(container, renderV2Event(evt));
       }
     } else if (cursorIdx < events.length - 1) {
       // Append only new events after cursor
       const newEvents = events.slice(cursorIdx + 1);
       for (const evt of newEvents) {
-        const html = renderV2Event(evt);
-        if (html) container.insertAdjacentHTML('beforeend', html);
+        appendRenderedEvent(container, renderV2Event(evt));
       }
     } else {
       // No new events
@@ -2144,6 +2294,22 @@ function renderV2AgentEvents(events) {
   }
 }
 
+function appendRenderedEvent(container, rendered) {
+  if (!rendered) return;
+  if (typeof rendered === "string") {
+    container.insertAdjacentHTML("beforeend", rendered);
+    return;
+  }
+  container.appendChild(rendered);
+}
+
+function createConvOutputEvent(className, output, options = {}) {
+  const wrapper = document.createElement("div");
+  wrapper.className = className;
+  wrapper.appendChild(createOutputBlock({ output }, options));
+  return wrapper;
+}
+
 function renderV2Event(evt) {
   const ts = evt.ts ? new Date(evt.ts).toLocaleTimeString() : '';
   const type = evt.type || 'unknown';
@@ -2155,8 +2321,20 @@ function renderV2Event(evt) {
       return `<div class="conv-event conv-user"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">user</span><span class="conv-text">${escapeHtml((evt.payload?.text || '').slice(0, 2000))}</span></div>`;
     case 'tool_call':
       return `<div class="conv-event conv-tool"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">tool</span><span class="conv-text">${escapeHtml(evt.payload?.tool || type)} ${escapeHtml((evt.payload?.path || '').slice(0, 200))}</span></div>`;
-    case 'tool_result':
-      return `<div class="conv-event conv-tool-result"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">result</span><span class="conv-text">${escapeHtml((evt.payload?.summary || '').slice(0, 500))}</span></div>`;
+    case 'tool_result': {
+      const summary = String(evt.payload?.summary || '');
+      const output = summary.length > 500 ? `${summary.slice(0, 500)}…` : summary;
+      const wrapper = createConvOutputEvent('conv-event conv-tool-result', output);
+      const tsEl = document.createElement('span');
+      tsEl.className = 'conv-ts';
+      tsEl.textContent = ts;
+      const roleEl = document.createElement('span');
+      roleEl.className = 'conv-role';
+      roleEl.textContent = 'result';
+      wrapper.insertBefore(roleEl, wrapper.firstChild);
+      wrapper.insertBefore(tsEl, wrapper.firstChild);
+      return wrapper;
+    }
     case 'agent_started':
       return `<div class="conv-event conv-lifecycle"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">▶</span><span class="conv-text">Agent started (${escapeHtml(evt.role || '')} lane ${evt.laneNumber ?? '?'})</span></div>`;
     case 'agent_exited':
@@ -2470,7 +2648,7 @@ function renderConvEvent(event) {
     case "tool_result": {
       const output = event.output || event.result || "";
       const truncated = String(output).length > 500 ? String(output).substring(0, 500) + "…" : String(output);
-      return `<div class="conv-tool-result"><pre>${escapeHtml(truncated)}</pre></div>`;
+      return createConvOutputEvent("conv-tool-result", truncated);
     }
 
     case "message_end": {
