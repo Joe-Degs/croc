@@ -149,10 +149,101 @@ export function buildWorkerToolsAllowlist(userTools: string | undefined | null):
 /** Maximum characters for conversation event text payloads. */
 const MAX_CONV_PAYLOAD_CHARS = 2000;
 
+/** Maximum UTF-8 bytes for per-event tool output payloads. */
+const MAX_TOOL_OUTPUT_BYTES = 16 * 1024;
+
 /** Truncate a string to maxLen chars, appending ellipsis if truncated. */
 function truncatePayload(text: string, maxLen: number): string {
 	if (text.length <= maxLen) return text;
 	return text.slice(0, maxLen) + "…";
+}
+
+function truncateUtf8Bytes(text: string, maxBytes: number): string {
+	let bytes = 0;
+	let end = 0;
+	for (const char of text) {
+		const charBytes = Buffer.byteLength(char, "utf8");
+		if (bytes + charBytes > maxBytes) break;
+		bytes += charBytes;
+		end += char.length;
+	}
+	return text.slice(0, end);
+}
+
+function boundedTextPayload(text: string, maxBytes: number): Record<string, unknown> {
+	const originalBytes = Buffer.byteLength(text, "utf8");
+	if (originalBytes <= maxBytes) return { text };
+	return {
+		text: truncateUtf8Bytes(text, maxBytes),
+		truncated: true,
+		originalBytes,
+	};
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function firstStringField(source: Record<string, unknown>, fields: string[]): string | null {
+	for (const field of fields) {
+		const value = source[field];
+		if (typeof value === "string" && value) return value;
+	}
+	return null;
+}
+
+function extractToolCallId(source: Record<string, unknown>): string | null {
+	const direct = firstStringField(source, ["toolCallId", "tool_call_id"]);
+	if (direct) return direct;
+	const message = source.message;
+	if (isRecord(message)) return firstStringField(message, ["toolCallId", "tool_call_id", "id"]);
+	return null;
+}
+
+function extractContentText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter(
+			(block: unknown): block is { text: string } => isRecord(block) && typeof block.text === "string",
+		)
+		.map((block) => block.text)
+		.join("\n");
+}
+
+function extractResultText(source: Record<string, unknown>): string {
+	const result = source.result;
+	if (typeof result === "string") return result;
+	if (isRecord(result)) {
+		const contentText = extractContentText(result.content);
+		if (contentText) return contentText;
+		const text = firstStringField(result, ["text", "output", "summary"]);
+		if (text) return text;
+	}
+	const output = firstStringField(source, ["output", "text", "summary"]);
+	return output ?? "";
+}
+
+function classifyToolDisplayMode(toolName: string): "terminal" | "file" | "edit" | "summary" {
+	const normalized = toolName.toLowerCase();
+	if (["bash", "shell", "terminal"].includes(normalized)) return "terminal";
+	if (["edit", "write", "multiedit", "multi_edit", "apply_patch"].includes(normalized))
+		return "edit";
+	if (["read", "grep", "glob", "ls", "list", "find"].includes(normalized)) return "file";
+	return "summary";
+}
+
+function previewToolArgs(args: unknown): { argsPreview: string; path: string } {
+	if (typeof args === "string") {
+		return { argsPreview: args.slice(0, 300), path: "" };
+	}
+	if (!isRecord(args)) return { argsPreview: "", path: "" };
+
+	const path = typeof args.path === "string" ? args.path.slice(0, 200) : "";
+	for (const value of Object.values(args)) {
+		if (typeof value === "string") return { argsPreview: value.slice(0, 300), path };
+	}
+	return { argsPreview: "", path };
 }
 
 /**
@@ -164,18 +255,7 @@ function extractAssistantText(message: Record<string, unknown>): string {
 	if (typeof message.content === "string") return message.content;
 	// Array of content blocks (Anthropic format)
 	// Guard: skip null/non-object entries to prevent TypeError on malformed streams
-	if (Array.isArray(message.content)) {
-		const textBlocks = message.content
-			.filter(
-				(b: unknown): b is { type: string; text: string } =>
-					typeof b === "object" &&
-					b !== null &&
-					(b as any).type === "text" &&
-					typeof (b as any).text === "string",
-			)
-			.map((b) => b.text);
-		if (textBlocks.length > 0) return textBlocks.join("\n");
-	}
+	if (Array.isArray(message.content)) return extractContentText(message.content);
 	// Fallback: try text field
 	if (typeof message.text === "string") return message.text;
 	return "";
@@ -411,6 +491,8 @@ export function spawnAgent(
 	let exitInterceptionCount = 0;
 	/** Whether the current turn had any tool calls (TP-172: text-only gate) */
 	let currentTurnHadToolCalls = false;
+	const liveToolOutputById = new Map<string, string>();
+	const emittedToolResults = new Set<string>();
 
 	// Timeout
 	let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
@@ -740,6 +822,25 @@ export function spawnAgent(
 								lastAssistantMessage = content;
 							}
 						}
+						if (isRecord(event.message) && event.message.role === "toolResult") {
+							const toolCallId = extractToolCallId(event);
+							if (!toolCallId || !emittedToolResults.has(toolCallId)) {
+								const output = extractContentText(event.message.content);
+								if (output) {
+									const payload = {
+										tool: firstStringField(event.message, ["toolName", "tool"]),
+										summary: output.slice(0, 200),
+										displayMode: classifyToolDisplayMode(
+											firstStringField(event.message, ["toolName", "tool"]) ?? "tool",
+										),
+										...boundedTextPayload(output, MAX_TOOL_OUTPUT_BYTES),
+										...(toolCallId ? { toolCallId } : {}),
+									};
+									emitEvent("tool_result", payload);
+									if (toolCallId) emittedToolResults.add(toolCallId);
+								}
+							}
+						}
 						// Request session stats immediately on first assistant message,
 						// then periodically at a bounded cadence to refresh context usage.
 						if (event.message?.role === "assistant") {
@@ -778,27 +879,55 @@ export function spawnAgent(
 						toolCalls++;
 						currentTurnHadToolCalls = true;
 						const toolName = event.toolName || "tool";
-						const argPreview =
-							typeof event.args === "string"
-								? event.args.slice(0, 300)
-								: event.args && typeof Object.values(event.args)[0] === "string"
-									? String(Object.values(event.args)[0]).slice(0, 300)
-									: "";
+						const { argsPreview: argPreview, path: toolPath } = previewToolArgs(event.args);
 						lastTool = argPreview ? `${toolName}: ${argPreview}` : toolName;
 						// TP-111: Bounded payload only — no raw args in durable event log
-						const toolPath = event.args?.path ? String(event.args.path).slice(0, 200) : "";
-						emitEvent("tool_call", { tool: toolName, path: toolPath, argsPreview: argPreview });
+						const toolCallId = extractToolCallId(event);
+						emitEvent("tool_call", {
+							tool: toolName,
+							path: toolPath,
+							argsPreview: argPreview,
+							displayMode: classifyToolDisplayMode(toolName),
+							...(toolCallId ? { toolCallId } : {}),
+						});
+						break;
+					}
+					case "tool_execution_update": {
+						const toolName = event.toolName || "tool";
+						const toolCallId = extractToolCallId(event);
+						const output = isRecord(event.partialResult)
+							? extractContentText(event.partialResult.content)
+							: "";
+						if (!output) break;
+
+						const liveKey = toolCallId ?? toolName;
+						const previous = liveToolOutputById.get(liveKey) ?? "";
+						const delta = output.startsWith(previous) ? output.slice(previous.length) : output;
+						liveToolOutputById.set(liveKey, output);
+						if (!delta) break;
+
+						emitEvent("tool_output_update", {
+							tool: toolName,
+							displayMode: classifyToolDisplayMode(toolName),
+							...boundedTextPayload(delta, MAX_TOOL_OUTPUT_BYTES),
+							...(toolCallId ? { toolCallId } : {}),
+						});
 						break;
 					}
 					case "tool_execution_end": {
-						// TP-111: Include bounded result summary for dashboard display
-						const toolResultSummary =
-							typeof event.result === "string"
-								? event.result.slice(0, 200)
-								: event.output
-									? String(event.output).slice(0, 200)
-									: "";
-						emitEvent("tool_result", { tool: event.toolName, summary: toolResultSummary });
+						const toolName = event.toolName || "tool";
+						const toolCallId = extractToolCallId(event);
+						const output = extractResultText(event);
+						const payload = {
+							tool: toolName,
+							summary: output.slice(0, 200),
+							displayMode: classifyToolDisplayMode(toolName),
+							isError: event.isError === true,
+							...boundedTextPayload(output, MAX_TOOL_OUTPUT_BYTES),
+							...(toolCallId ? { toolCallId } : {}),
+						};
+						emitEvent("tool_result", payload);
+						if (toolCallId) emittedToolResults.add(toolCallId);
 						break;
 					}
 					case "auto_retry_start": {

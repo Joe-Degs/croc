@@ -154,8 +154,8 @@ describe("1.x: Agent-host emits conversation events (TP-111)", () => {
 	});
 
 	it("1.6: tool_result event includes summary field", () => {
-		const emitIdx = agentHostSrc.indexOf('emitEvent("tool_result"');
-		const block = agentHostSrc.slice(emitIdx, emitIdx + 200);
+		const endIdx = agentHostSrc.indexOf('case "tool_execution_end"');
+		const block = agentHostSrc.slice(endIdx, endIdx + 900);
 		expect(block).toContain("summary:");
 	});
 });
@@ -178,12 +178,11 @@ describe("2.x: Payload safety (TP-111)", () => {
 	});
 
 	it("2.4: extractAssistantText handles array content blocks with null guards", () => {
-		const fnIdx = agentHostSrc.indexOf("function extractAssistantText");
+		const fnIdx = agentHostSrc.indexOf("function extractContentText");
 		const block = agentHostSrc.slice(fnIdx, fnIdx + 600);
-		expect(block).toContain("Array.isArray(message.content)");
+		expect(block).toContain("Array.isArray(content)");
 		// Must guard against null/non-object entries
-		expect(block).toContain('typeof b === "object"');
-		expect(block).toContain("b !== null");
+		expect(block).toContain("isRecord(block)");
 	});
 });
 
@@ -231,6 +230,10 @@ describe("4.x: Event type contract (TP-111)", () => {
 
 	it("4.2: assistant_message is a valid RuntimeAgentEventType", () => {
 		expect(typesSrc).toContain('"assistant_message"');
+	});
+
+	it("4.3: tool_output_update is a valid RuntimeAgentEventType", () => {
+		expect(typesSrc).toContain('"tool_output_update"');
 	});
 });
 
@@ -387,5 +390,260 @@ describe("5.x: Runtime behavioral emission (TP-111)", () => {
 		const assistantEvt = events.find((e) => e.type === "assistant_message");
 		expect(assistantEvt).toBeDefined();
 		expect((assistantEvt!.payload as any).text).toBe("OK");
+	});
+
+	it("5.4: captures Pi tool result content text with metadata", async () => {
+		const events: RuntimeAgentEvent[] = [];
+		const output = "line 1\nline 2\nline 3";
+
+		const { promise } = spawnAgent(
+			{
+				agentId: "orch-test-lane-4-worker",
+				role: "worker",
+				batchId: "batch-tp111",
+				laneNumber: 4,
+				taskId: "TP-111",
+				repoId: "default",
+				cwd: process.cwd(),
+				prompt: "run",
+				mailboxDir: null,
+				stateRoot: null,
+			},
+			(evt) => events.push(evt),
+		);
+
+		expect(lastSpawnedProc).toBeDefined();
+		lastSpawnedProc!.stdout.write(
+			JSON.stringify({
+				type: "tool_execution_start",
+				toolName: "bash",
+				toolCallId: "call-bash-1",
+				args: { command: "printf output" },
+			}) + "\n",
+		);
+		lastSpawnedProc!.stdout.write(
+			JSON.stringify({
+				type: "tool_execution_end",
+				toolName: "bash",
+				toolCallId: "call-bash-1",
+				isError: true,
+				result: { content: [{ type: "text", text: output }] },
+			}) + "\n",
+		);
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "agent_end" }) + "\n");
+		lastSpawnedProc!.emit("close", 0, null);
+
+		await promise;
+
+		const toolCall = events.find((e) => e.type === "tool_call");
+		const toolResult = events.find((e) => e.type === "tool_result");
+		expect(toolCall).toBeDefined();
+		expect(toolResult).toBeDefined();
+
+		const callPayload = toolCall!.payload as Record<string, unknown>;
+		expect(callPayload["toolCallId"]).toBe("call-bash-1");
+		expect(callPayload["displayMode"]).toBe("terminal");
+
+		const resultPayload = toolResult!.payload as Record<string, unknown>;
+		expect(resultPayload["toolCallId"]).toBe("call-bash-1");
+		expect(resultPayload["displayMode"]).toBe("terminal");
+		expect(resultPayload["isError"]).toBe(true);
+		expect(resultPayload["text"]).toBe(output);
+		expect(resultPayload["summary"]).toBe(output);
+	});
+
+	it("5.5: emits bounded live output deltas instead of repeated cumulative output", async () => {
+		const events: RuntimeAgentEvent[] = [];
+
+		const { promise } = spawnAgent(
+			{
+				agentId: "orch-test-lane-5-worker",
+				role: "worker",
+				batchId: "batch-tp111",
+				laneNumber: 5,
+				taskId: "TP-111",
+				repoId: "default",
+				cwd: process.cwd(),
+				prompt: "run",
+				mailboxDir: null,
+				stateRoot: null,
+			},
+			(evt) => events.push(evt),
+		);
+
+		expect(lastSpawnedProc).toBeDefined();
+		for (const text of ["one\n", "one\ntwo\n", "one\ntwo\n"]) {
+			lastSpawnedProc!.stdout.write(
+				JSON.stringify({
+					type: "tool_execution_update",
+					toolName: "bash",
+					toolCallId: "call-live-1",
+					partialResult: { content: [{ type: "text", text }] },
+				}) + "\n",
+			);
+		}
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "agent_end" }) + "\n");
+		lastSpawnedProc!.emit("close", 0, null);
+
+		await promise;
+
+		const updates = events.filter((e) => e.type === "tool_output_update");
+		expect(updates.length).toBe(2);
+		expect(updates[0]!.payload["text"]).toBe("one\n");
+		expect(updates[1]!.payload["text"]).toBe("two\n");
+		expect(updates[0]!.payload["toolCallId"]).toBe("call-live-1");
+	});
+
+	it("5.6: caps per-event tool output at 16 KiB with byte truncation metadata", async () => {
+		const events: RuntimeAgentEvent[] = [];
+		const huge = "🙂".repeat(5 * 1024);
+
+		const { promise } = spawnAgent(
+			{
+				agentId: "orch-test-lane-6-worker",
+				role: "worker",
+				batchId: "batch-tp111",
+				laneNumber: 6,
+				taskId: "TP-111",
+				repoId: "default",
+				cwd: process.cwd(),
+				prompt: "run",
+				mailboxDir: null,
+				stateRoot: null,
+			},
+			(evt) => events.push(evt),
+		);
+
+		expect(lastSpawnedProc).toBeDefined();
+		lastSpawnedProc!.stdout.write(
+			JSON.stringify({
+				type: "tool_execution_end",
+				toolName: "read",
+				toolCallId: "call-read-1",
+				result: { content: [{ type: "text", text: huge }] },
+			}) + "\n",
+		);
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "agent_end" }) + "\n");
+		lastSpawnedProc!.emit("close", 0, null);
+
+		await promise;
+
+		const toolResult = events.find((e) => e.type === "tool_result");
+		expect(toolResult).toBeDefined();
+		const payload = toolResult!.payload as Record<string, unknown>;
+		expect(Buffer.byteLength(String(payload["text"]), "utf8")).toBe(16 * 1024);
+		expect(String(payload["text"]).length).toBe(8 * 1024);
+		expect(payload["truncated"]).toBe(true);
+		expect(payload["originalBytes"]).toBe(20 * 1024);
+		expect(payload["originalLength"]).toBeUndefined();
+		expect(payload["displayMode"]).toBe("file");
+	});
+
+	it("5.7: captures toolResult message_end fallback without duplicate result events", async () => {
+		const events: RuntimeAgentEvent[] = [];
+
+		const { promise } = spawnAgent(
+			{
+				agentId: "orch-test-lane-7-worker",
+				role: "worker",
+				batchId: "batch-tp111",
+				laneNumber: 7,
+				taskId: "TP-111",
+				repoId: "default",
+				cwd: process.cwd(),
+				prompt: "run",
+				mailboxDir: null,
+				stateRoot: null,
+			},
+			(evt) => events.push(evt),
+		);
+
+		expect(lastSpawnedProc).toBeDefined();
+		lastSpawnedProc!.stdout.write(
+			JSON.stringify({
+				type: "tool_execution_end",
+				toolName: "bash",
+				toolCallId: "call-fallback-1",
+				result: { content: [{ type: "text", text: "primary" }] },
+			}) + "\n",
+		);
+		lastSpawnedProc!.stdout.write(
+			JSON.stringify({
+				type: "message_end",
+				id: "envelope-message-end-1",
+				message: {
+					role: "toolResult",
+					toolCallId: "call-fallback-1",
+					content: [{ type: "text", text: "fallback" }],
+				},
+			}) + "\n",
+		);
+		lastSpawnedProc!.stdout.write(
+			JSON.stringify({
+				type: "message_end",
+				message: {
+					role: "toolResult",
+					toolCallId: "call-fallback-2",
+					toolName: "read",
+					content: [{ type: "text", text: "fallback only" }],
+				},
+			}) + "\n",
+		);
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "agent_end" }) + "\n");
+		lastSpawnedProc!.emit("close", 0, null);
+
+		await promise;
+
+		const results = events.filter((e) => e.type === "tool_result");
+		expect(results.length).toBe(2);
+		expect(results.map((e) => e.payload["toolCallId"]).join(",")).toBe(
+			"call-fallback-1,call-fallback-2",
+		);
+		expect(results[0]!.payload["text"]).toBe("primary");
+		expect(results[1]!.payload["text"]).toBe("fallback only");
+		expect(results[1]!.payload["displayMode"]).toBe("file");
+	});
+
+	it("5.8: classifies edit tools as edit and unknown tools as summary", async () => {
+		const events: RuntimeAgentEvent[] = [];
+
+		const { promise } = spawnAgent(
+			{
+				agentId: "orch-test-lane-8-worker",
+				role: "worker",
+				batchId: "batch-tp111",
+				laneNumber: 8,
+				taskId: "TP-111",
+				repoId: "default",
+				cwd: process.cwd(),
+				prompt: "run",
+				mailboxDir: null,
+				stateRoot: null,
+			},
+			(evt) => events.push(evt),
+		);
+
+		expect(lastSpawnedProc).toBeDefined();
+		for (const [toolName, toolCallId] of [
+			["edit", "call-edit-1"],
+			["custom_tool", "call-custom-1"],
+		] as const) {
+			lastSpawnedProc!.stdout.write(
+				JSON.stringify({
+					type: "tool_execution_start",
+					toolName,
+					toolCallId,
+					args: { path: "/tmp/file.txt", content: "content" },
+				}) + "\n",
+			);
+		}
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "agent_end" }) + "\n");
+		lastSpawnedProc!.emit("close", 0, null);
+
+		await promise;
+
+		const calls = events.filter((e) => e.type === "tool_call");
+		expect(calls[0]!.payload["displayMode"]).toBe("edit");
+		expect(calls[1]!.payload["displayMode"]).toBe("summary");
 	});
 });

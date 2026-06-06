@@ -4192,6 +4192,7 @@ export type RuntimeAgentEventType =
 	| "prompt_sent"
 	| "assistant_message"
 	| "tool_call"
+	| "tool_output_update"
 	| "tool_result"
 	// Telemetry
 	| "usage_delta"
