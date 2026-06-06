@@ -1,0 +1,80 @@
+{
+  "name": "taskplane",
+  "version": "0.30.1",
+  "description": "AI agent orchestration for pi — parallel task execution with checkpoint discipline",
+  "keywords": [
+    "pi-package",
+    "ai",
+    "agent",
+    "orchestration",
+    "task-runner",
+    "parallel"
+  ],
+  "bin": {
+    "taskplane": "bin/taskplane.mjs"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/task-orchestrator.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --project extensions/tsconfig.ci.json --noEmit",
+    "lint": "biome lint --no-errors-on-unmatched .",
+    "lint:fix": "biome lint --write --no-errors-on-unmatched .",
+    "format": "biome format --write --no-errors-on-unmatched .",
+    "format:check": "biome format --no-errors-on-unmatched ."
+  },
+  "files": [
+    "bin/",
+    "dashboard/",
+    "extensions/task-orchestrator.ts",
+    "extensions/reviewer-extension.ts",
+    "extensions/taskplane/",
+    "skills/",
+    "templates/"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "@earendil-works/pi-ai": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "jiti": "^2.6.1",
+    "yaml": "^2.4.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.15",
+    "@types/node": "^22.19.18",
+    "typescript": "5.6.3"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HenryLach/taskplane.git"
+  },
+  "homepage": "https://github.com/HenryLach/taskplane#readme",
+  "bugs": {
+    "url": "https://github.com/HenryLach/taskplane/issues"
+  },
+  "author": "Henry Lach"
+}

@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>V3 — Agent quartet</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 20px;
+  }
+  .agent {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    position: relative;
+    border-top: 3px solid currentColor;
+  }
+  .agent.supervisor { color: var(--purple); }
+  .agent.worker { color: var(--green); }
+  .agent.reviewer { color: var(--amber); }
+  .agent.merger { color: var(--blue); }
+  .agent-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 16px;
+  }
+  .agent-name {
+    font-family: var(--mono);
+    font-size: var(--fs-2xl);
+    color: var(--text);
+    font-weight: 600;
+  }
+  .agent-tag {
+    font-family: var(--mono);
+    font-size: var(--fs-2xs);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid currentColor;
+  }
+  .agent-tagline {
+    font-size: var(--fs-lg);
+    color: var(--text-dim);
+    line-height: 1.55;
+    margin-bottom: 18px;
+    min-height: 64px;
+  }
+  .section-label {
+    font-family: var(--mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: 8px;
+    margin-top: 16px;
+  }
+  .duties {
+    list-style: none;
+    font-family: var(--mono);
+    font-size: var(--fs-sm);
+    line-height: 1.7;
+  }
+  .duties li {
+    padding-left: 16px;
+    position: relative;
+    color: var(--text);
+  }
+  .duties li::before {
+    content: '›';
+    position: absolute; left: 0;
+    color: currentColor;
+  }
+  .model-line {
+    font-family: var(--mono);
+    font-size: var(--fs-sm);
+    color: var(--text-dim);
+    padding: 8px 10px;
+    background: var(--surface-2);
+    border-radius: 4px;
+    margin-top: 14px;
+    border-left: 2px solid currentColor;
+  }
+  .model-line .mk { color: var(--text-faint); }
+  .model-line .mv { color: var(--text); }
+
+  .flow-band {
+    margin-top: 40px;
+    padding: 20px 24px;
+    background: var(--surface-2);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: var(--fs-md);
+    color: var(--text-dim);
+    line-height: 1.7;
+    text-align: center;
+  }
+  .flow-band .hl-p { color: var(--purple); }
+  .flow-band .hl-g { color: var(--green); }
+  .flow-band .hl-a { color: var(--amber); }
+  .flow-band .hl-b { color: var(--blue); }
+  .flow-band .arrow { color: var(--text-faint); padding: 0 6px; }
+
+  /* Mobile: collapse the 4-agent quartet. */
+  @media (max-width: 900px) {
+    .grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 700px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="eyebrow">
+      <span>3 · Roster</span>
+      <img class="eyebrow-logo" src="taskplane-word-white.svg" alt="Taskplane">
+      <nav class="page-nav" aria-label="Page navigation">
+        <a href="https://github.com/HenryLach/taskplane" target="_blank" rel="noopener" aria-label="Taskplane repository" title="Taskplane repository"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" role="img"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a>
+        <a href="02-light-factory-vs-dark.html" aria-label="Previous">&larr;</a>
+        <a href="index.html" aria-label="Index">&#9675;</a>
+        <a href="04-task-packet-anatomy.html" aria-label="Next">&rarr;</a>
+      </nav>
+    </div>
+    <h1>The agent quartet</h1>
+    <p class="subtitle">Four roles. Four prompts. Four jobs. No more agents than the work demands — and no less.</p>
+
+    <div class="grid">
+      <div class="agent supervisor">
+        <div class="agent-header">
+          <div class="agent-name">supervisor</div>
+          <div class="agent-tag">control</div>
+        </div>
+        <div class="agent-tagline">The conversational operator-in-the-loop. Watches the batch, talks to agents, never writes code.</div>
+        <div class="section-label">Owns</div>
+        <ul class="duties">
+          <li>batch progress + recovery</li>
+          <li>steering via mailbox</li>
+          <li>orch_* tool calls</li>
+          <li>failure triage</li>
+        </ul>
+        <div class="model-line"><span class="mk">model →</span> <span class="mv">your Pi session's model</span></div>
+      </div>
+
+      <div class="agent worker">
+        <div class="agent-header">
+          <div class="agent-name">worker</div>
+          <div class="agent-tag">execute</div>
+        </div>
+        <div class="agent-tagline">Implements the steps in PROMPT.md. One per lane. Owns checkpoint discipline and STATUS.md.</div>
+        <div class="section-label">Owns</div>
+        <ul class="duties">
+          <li>step-by-step execution</li>
+          <li>commits at step boundary</li>
+          <li>review_step calls</li>
+          <li>.DONE on completion</li>
+        </ul>
+        <div class="model-line"><span class="mk">model →</span> <span class="mv">e.g. claude-opus</span></div>
+      </div>
+
+      <div class="agent reviewer">
+        <div class="agent-header">
+          <div class="agent-name">reviewer</div>
+          <div class="agent-tag">verify</div>
+        </div>
+        <div class="agent-tagline">Independent quality gate. Reads plans and code. Persistent across a task — remembers what it flagged earlier.</div>
+        <div class="section-label">Owns</div>
+        <ul class="duties">
+          <li>plan + code reviews</li>
+          <li>APPROVE / REVISE / RETHINK</li>
+          <li>cross-step memory</li>
+          <li>verdicts on disk in .reviews/</li>
+        </ul>
+        <div class="model-line"><span class="mk">model →</span> <span class="mv">different family (e.g. gpt-5)</span></div>
+      </div>
+
+      <div class="agent merger">
+        <div class="agent-header">
+          <div class="agent-name">merger</div>
+          <div class="agent-tag">integrate</div>
+        </div>
+        <div class="agent-tagline">LLM that combines lane branches into the orch branch. Reads conflict markers. Resolves semantically. Runs verify.</div>
+        <div class="section-label">Owns</div>
+        <ul class="duties">
+          <li>git merge --no-ff per lane</li>
+          <li>semantic conflict resolution</li>
+          <li>post-merge verification</li>
+          <li>result.json reporting</li>
+        </ul>
+        <div class="model-line"><span class="mk">model →</span> <span class="mv">capable code model</span></div>
+      </div>
+    </div>
+
+    <div class="flow-band">
+      <span class="hl-p">supervisor</span> <span class="arrow">→</span> spawns <span class="hl-g">worker</span> per lane <span class="arrow">→</span> worker calls <span class="hl-a">reviewer</span> at step boundaries <span class="arrow">→</span> wave completes <span class="arrow">→</span> <span class="hl-b">merger</span> combines lanes <span class="arrow">→</span> next wave
+    </div>
+  </div>
+<script src="nav.js"></script>
+</body>
+</html>

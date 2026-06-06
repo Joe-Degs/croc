@@ -1,0 +1,608 @@
+/**
+ * Mailbox V2 Tests — TP-106
+ *
+ * Tests for outbox, broadcast, rate limiting, and registry-backed
+ * supervisor tool contracts.
+ *
+ * Run: node --experimental-strip-types --experimental-test-module-mocks --no-warnings --import ./tests/loader.mjs --test tests/mailbox-v2.test.ts
+ */
+
+import { describe, it, beforeEach, afterEach } from "node:test";
+import { expect } from "./expect.ts";
+import { mkdtempSync, existsSync, readFileSync, rmSync, readdirSync } from "fs";
+import { join, dirname } from "path";
+import { tmpdir } from "os";
+import { fileURLToPath } from "url";
+
+import {
+	writeOutboxMessage,
+	readOutbox,
+	readOutboxHistory,
+	discoverMailboxAgentIds,
+	writeBroadcastMessage,
+	sessionOutboxDir,
+	ackOutboxMessage,
+	appendMailboxAuditEvent,
+	checkRateLimit,
+	recordSend,
+	_resetRateLimits,
+	RATE_LIMIT_WINDOW_MS,
+} from "../taskplane/mailbox.ts";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const extensionSrc = readFileSync(join(__dirname, "..", "taskplane", "extension.ts"), "utf-8");
+
+let tmpDir: string;
+
+beforeEach(() => {
+	tmpDir = mkdtempSync(join(tmpdir(), "tp-mailbox-v2-test-"));
+	_resetRateLimits();
+});
+
+afterEach(() => {
+	try {
+		rmSync(tmpDir, { recursive: true, force: true });
+	} catch {
+		/* ignore */
+	}
+	_resetRateLimits();
+});
+
+// ── 1. Outbox ────────────────────────────────────────────────────────
+
+describe("1.x: Agent outbox", () => {
+	const batchId = "test-batch";
+	const agentId = "orch-test-lane-1-worker";
+
+	it("1.1: writeOutboxMessage creates file in outbox directory", () => {
+		const msg = writeOutboxMessage(tmpDir, batchId, agentId, {
+			from: agentId,
+			type: "reply",
+			content: "Acknowledged the steering message.",
+		});
+		const outDir = sessionOutboxDir(tmpDir, batchId, agentId);
+		expect(existsSync(outDir)).toBe(true);
+		const files = readdirSync(outDir).filter((f) => f.endsWith(".msg.json"));
+		expect(files.length).toBe(1);
+		expect(msg.to).toBe("supervisor");
+		expect(msg.type).toBe("reply");
+	});
+
+	it("1.2: readOutbox returns all written messages", () => {
+		writeOutboxMessage(tmpDir, batchId, agentId, { from: agentId, type: "reply", content: "first" });
+		writeOutboxMessage(tmpDir, batchId, agentId, {
+			from: agentId,
+			type: "escalate",
+			content: "second",
+		});
+		const messages = readOutbox(tmpDir, batchId, agentId);
+		expect(messages.length).toBe(2);
+		const contents = messages.map((m) => m.content).sort();
+		expect(contents).toContain("first");
+		expect(contents).toContain("second");
+	});
+
+	it("1.3: readOutbox returns empty array for non-existent agent", () => {
+		expect(readOutbox(tmpDir, batchId, "nonexistent")).toEqual([]);
+	});
+
+	it("1.4: outbox message has correct envelope fields", () => {
+		const msg = writeOutboxMessage(tmpDir, batchId, agentId, {
+			from: agentId,
+			type: "escalate",
+			content: "I'm blocked on Step 3.",
+			expectsReply: true,
+		});
+		expect(msg.batchId).toBe(batchId);
+		expect(msg.from).toBe(agentId);
+		expect(msg.to).toBe("supervisor");
+		expect(msg.type).toBe("escalate");
+		expect(msg.expectsReply).toBe(true);
+		expect(typeof msg.id).toBe("string");
+		expect(typeof msg.timestamp).toBe("number");
+	});
+
+	it("1.5: outbox enforces 4KB limit", () => {
+		const bigContent = "x".repeat(5000);
+		let threw = false;
+		try {
+			writeOutboxMessage(tmpDir, batchId, agentId, {
+				from: agentId,
+				type: "reply",
+				content: bigContent,
+			});
+		} catch {
+			threw = true;
+		}
+		expect(threw).toBe(true);
+	});
+
+	it("1.6: ackOutboxMessage moves message to processed and prevents reread", () => {
+		const msg = writeOutboxMessage(tmpDir, batchId, agentId, {
+			from: agentId,
+			type: "reply",
+			content: "processed once",
+		});
+		expect(readOutbox(tmpDir, batchId, agentId).length).toBe(1);
+		expect(ackOutboxMessage(tmpDir, batchId, agentId, msg.id)).toBe(true);
+		expect(readOutbox(tmpDir, batchId, agentId).length).toBe(0);
+		const processedPath = join(
+			tmpDir,
+			".pi",
+			"mailbox",
+			batchId,
+			agentId,
+			"outbox",
+			"processed",
+			`${msg.id}.msg.json`,
+		);
+		expect(existsSync(processedPath)).toBe(true);
+	});
+});
+
+// ── 2. Broadcast ─────────────────────────────────────────────────────
+
+describe("2.x: Broadcast messages", () => {
+	const batchId = "test-batch";
+
+	it("2.1: writeBroadcastMessage creates file in _broadcast/inbox", () => {
+		const msg = writeBroadcastMessage(tmpDir, batchId, {
+			from: "supervisor",
+			type: "info",
+			content: "All agents: wrap up current step.",
+		});
+		const broadcastInbox = join(tmpDir, ".pi", "mailbox", batchId, "_broadcast", "inbox");
+		expect(existsSync(broadcastInbox)).toBe(true);
+		const files = readdirSync(broadcastInbox).filter((f) => f.endsWith(".msg.json"));
+		expect(files.length).toBe(1);
+		expect(msg.to).toBe("_broadcast");
+	});
+
+	it("2.2: appendMailboxAuditEvent writes JSONL event", () => {
+		appendMailboxAuditEvent(tmpDir, batchId, {
+			type: "message_sent",
+			from: "supervisor",
+			to: "agent-1",
+			messageType: "info",
+			contentPreview: "hello",
+		});
+		const eventsPath = join(tmpDir, ".pi", "mailbox", batchId, "events.jsonl");
+		expect(existsSync(eventsPath)).toBe(true);
+		const lines = readFileSync(eventsPath, "utf-8").trim().split("\n");
+		expect(lines.length).toBe(1);
+		expect(lines[0]).toContain('"type":"message_sent"');
+	});
+});
+
+// ── 3. Rate limiting ─────────────────────────────────────────────────
+
+describe("3.x: Rate limiting", () => {
+	it("3.1: first send is allowed", () => {
+		const result = checkRateLimit("agent-1");
+		expect(result.allowed).toBe(true);
+	});
+
+	it("3.2: immediate second send is blocked", () => {
+		recordSend("agent-1");
+		const result = checkRateLimit("agent-1");
+		expect(result.allowed).toBe(false);
+		expect(typeof result.retryAfterMs).toBe("number");
+		expect(result.retryAfterMs!).toBeGreaterThan(0);
+	});
+
+	it("3.3: different agents have independent limits", () => {
+		recordSend("agent-1");
+		const result = checkRateLimit("agent-2");
+		expect(result.allowed).toBe(true);
+	});
+
+	it("3.4: _resetRateLimits clears all limits", () => {
+		recordSend("agent-1");
+		_resetRateLimits();
+		const result = checkRateLimit("agent-1");
+		expect(result.allowed).toBe(true);
+	});
+
+	it("3.5: RATE_LIMIT_WINDOW_MS is 30 seconds", () => {
+		expect(RATE_LIMIT_WINDOW_MS).toBe(30_000);
+	});
+
+	it("3.6: broadcast uses all-or-none rate-limit policy (TP-092)", () => {
+		// The doBroadcastMessage function checks ALL recipients before sending.
+		// If ANY recipient is rate-limited, the entire broadcast is rejected.
+		const fnIdx = extensionSrc.indexOf("function doBroadcastMessage(");
+		const block = extensionSrc.slice(fnIdx, fnIdx + 2000);
+		// Verify: blocked recipients computed BEFORE write
+		const blockedIdx = block.indexOf("const blocked = recipients");
+		const writeIdx = block.indexOf("writeBroadcastMessage");
+		expect(blockedIdx).toBeGreaterThan(-1);
+		expect(writeIdx).toBeGreaterThan(-1);
+		expect(blockedIdx).toBeLessThan(writeIdx);
+		// Verify: blocked.length > 0 rejects the entire broadcast
+		expect(block).toContain("blocked.length > 0");
+	});
+
+	it("3.7: broadcast rate-limit emits per-agent audit events (TP-092)", () => {
+		const fnIdx = extensionSrc.indexOf("function doBroadcastMessage(");
+		const block = extensionSrc.slice(fnIdx, fnIdx + 2000);
+		// Each blocked recipient gets an audit event
+		expect(block).toContain("message_rate_limited");
+		expect(block).toContain("appendMailboxAuditEvent");
+	});
+
+	it("3.8: direct send emits rate-limit audit event (TP-092)", () => {
+		const fnIdx = extensionSrc.indexOf("function doSendAgentMessage(");
+		const block = extensionSrc.slice(fnIdx, fnIdx + 3000);
+		expect(block).toContain("message_rate_limited");
+		expect(block).toContain("appendMailboxAuditEvent");
+	});
+});
+
+// ── 4. Registry-backed supervisor tools (source contract) ────────────
+
+describe("4.x: Registry-backed supervisor tool contracts", () => {
+	it("4.1: send_agent_message checks registry-backed liveness", () => {
+		const fnIdx = extensionSrc.indexOf("function doSendAgentMessage(");
+		const block = extensionSrc.slice(fnIdx, fnIdx + 3000);
+		expect(block).toContain("readRegistrySnapshot");
+		expect(block).toContain("isTerminalStatus");
+		expect(block).toContain("registryIsProcessAlive");
+		expect(block).not.toContain("tmuxHasSession(to)");
+	});
+
+	it("4.2: send_agent_message applies rate limiting", () => {
+		const fnIdx = extensionSrc.indexOf("function doSendAgentMessage(");
+		const block = extensionSrc.slice(fnIdx, fnIdx + 3500);
+		expect(block).toContain("checkRateLimit(to)");
+		expect(block).toContain("recordSend(to)");
+		expect(block).toContain("Rate limited");
+	});
+
+	it("4.3: list_active_agents checks registry first", () => {
+		const fnIdx = extensionSrc.indexOf("function doListActiveAgents(");
+		const block = extensionSrc.slice(fnIdx, fnIdx + 1000);
+		expect(block).toContain("readRegistrySnapshot");
+		expect(block).toContain("formatRegistryAgents");
+	});
+
+	it("4.4: read_agent_replies tool is registered", () => {
+		expect(extensionSrc).toContain('"read_agent_replies"');
+		expect(extensionSrc).toContain("doReadAgentReplies");
+	});
+
+	it("4.5: broadcast_message tool is registered", () => {
+		expect(extensionSrc).toContain('"broadcast_message"');
+		expect(extensionSrc).toContain("doBroadcastMessage");
+	});
+
+	it("4.6: read_agent_replies reads outbox history (pending + processed)", () => {
+		expect(extensionSrc).toContain("readOutboxHistory(stateRoot");
+	});
+
+	it("4.7: broadcast_message calls writeBroadcastMessage", () => {
+		expect(extensionSrc).toContain("writeBroadcastMessage(stateRoot");
+	});
+
+	it("4.8: read_agent_replies uses registry-backed agent discovery helper", () => {
+		expect(extensionSrc).toContain("collectKnownAgentIds(stateRoot, state)");
+	});
+
+	it("4.9: broadcast_message applies per-agent rate limiting", () => {
+		const fnIdx = extensionSrc.indexOf("function doBroadcastMessage(");
+		const block = extensionSrc.slice(fnIdx, fnIdx + 3500);
+		expect(block).toContain("collectKnownAgentIds");
+		expect(block).toContain("checkRateLimit(agentId)");
+		expect(block).toContain("recordSend(agentId)");
+	});
+});
+
+// ── 5. Broadcast delivery in agent-host (TP-106 remediation) ──────
+
+describe("5.x: Agent-host broadcast delivery", () => {
+	const agentHostSrc = readFileSync(join(__dirname, "..", "taskplane", "agent-host.ts"), "utf-8");
+
+	it("5.1: checkMailbox reads _broadcast/inbox in addition to own inbox", () => {
+		expect(agentHostSrc).toContain("_broadcast");
+		expect(agentHostSrc).toContain("broadcastInbox");
+		expect(agentHostSrc).toContain("isBroadcast");
+	});
+
+	it("5.2: broadcast messages are validated with to === _broadcast", () => {
+		expect(agentHostSrc).toContain('msg.to !== "_broadcast"');
+	});
+
+	it("5.3: broadcast delivery uses per-agent ack markers (fan-out safe)", () => {
+		expect(agentHostSrc).toContain("if (isBroadcast && existsSync(ackPath)) continue");
+		expect(agentHostSrc).toContain("writeFileSync(ackPath, raw");
+	});
+
+	it("5.4: registry snapshot freshness is maintained while agent is running", () => {
+		expect(agentHostSrc).toContain("REGISTRY_REFRESH_INTERVAL_MS");
+		expect(agentHostSrc).toContain("refreshRegistrySnapshot(false)");
+	});
+});
+
+// ── 6. Lane-runner outbox + bridge wiring (TP-106 remediation) ─────
+
+describe("6.x: Lane-runner outbox and bridge wiring", () => {
+	const laneRunnerSrc = readFileSync(join(__dirname, "..", "taskplane", "lane-runner.ts"), "utf-8");
+
+	it("6.1: lane-runner polls and acks outbox messages", () => {
+		expect(laneRunnerSrc).toContain("readOutbox");
+		expect(laneRunnerSrc).toContain("ackOutboxMessage");
+	});
+
+	it("6.2: lane-runner emits reply/escalation audit events", () => {
+		expect(laneRunnerSrc).toContain("reply_sent");
+		expect(laneRunnerSrc).toContain("escalation_sent");
+		expect(laneRunnerSrc).toContain("appendMailboxAuditEvent");
+	});
+
+	it("6.3: lane-runner wires agent bridge extension and env", () => {
+		expect(laneRunnerSrc).toContain("agent-bridge-extension.ts");
+		expect(laneRunnerSrc).toContain("TASKPLANE_OUTBOX_DIR");
+		expect(laneRunnerSrc).toContain("TASKPLANE_AGENT_ID");
+	});
+
+	it("6.4: lane-runner can fan out outbox messages to supervisor alerts", () => {
+		expect(laneRunnerSrc).toContain("onSupervisorAlert");
+		expect(laneRunnerSrc).toContain('category: "agent-message"');
+	});
+});
+
+// ── 7. Agent bridge extension exists (TP-106 remediation) ────────
+
+describe("7.x: Agent bridge extension", () => {
+	it("7.1: agent-bridge-extension.ts exists and exports default", async () => {
+		const mod = await import("../taskplane/agent-bridge-extension.ts");
+		expect(typeof mod.default).toBe("function");
+	});
+
+	it("7.2: provides notify_supervisor tool", () => {
+		const src = readFileSync(
+			join(__dirname, "..", "taskplane", "agent-bridge-extension.ts"),
+			"utf-8",
+		);
+		expect(src).toContain('"notify_supervisor"');
+	});
+
+	it("7.3: provides escalate_to_supervisor tool", () => {
+		const src = readFileSync(
+			join(__dirname, "..", "taskplane", "agent-bridge-extension.ts"),
+			"utf-8",
+		);
+		expect(src).toContain('"escalate_to_supervisor"');
+	});
+
+	it("7.4: writes to outbox directory via TASKPLANE_OUTBOX_DIR", () => {
+		const src = readFileSync(
+			join(__dirname, "..", "taskplane", "agent-bridge-extension.ts"),
+			"utf-8",
+		);
+		expect(src).toContain("TASKPLANE_OUTBOX_DIR");
+	});
+
+	it("7.5: uses atomic write (tmp + rename)", () => {
+		const src = readFileSync(
+			join(__dirname, "..", "taskplane", "agent-bridge-extension.ts"),
+			"utf-8",
+		);
+		expect(src).toContain(".msg.json.tmp");
+		expect(src).toContain("renameSync");
+	});
+});
+
+// ── 8. Export validation ─────────────────────────────────────────────
+
+describe("8.x: Mailbox V2 exports", () => {
+	it("8.1: writeOutboxMessage is a function", () => {
+		expect(typeof writeOutboxMessage).toBe("function");
+	});
+
+	it("8.2: readOutbox is a function", () => {
+		expect(typeof readOutbox).toBe("function");
+	});
+
+	it("8.3: writeBroadcastMessage is a function", () => {
+		expect(typeof writeBroadcastMessage).toBe("function");
+	});
+
+	it("8.4: checkRateLimit is a function", () => {
+		expect(typeof checkRateLimit).toBe("function");
+	});
+
+	it("8.5: recordSend is a function", () => {
+		expect(typeof recordSend).toBe("function");
+	});
+
+	it("8.6: sessionOutboxDir is a function", () => {
+		expect(typeof sessionOutboxDir).toBe("function");
+	});
+
+	it("8.7: ackOutboxMessage is a function", () => {
+		expect(typeof ackOutboxMessage).toBe("function");
+	});
+
+	it("8.8: appendMailboxAuditEvent is a function", () => {
+		expect(typeof appendMailboxAuditEvent).toBe("function");
+	});
+});
+
+// ── 9.x: readOutboxHistory (TP-091) ─────────────────────────
+
+describe("9.x: Outbox history (pending + processed)", () => {
+	const bid = "20260330T091000";
+	const aid = "orch-test-lane-1-worker";
+
+	it("9.1: readOutboxHistory returns pending messages", () => {
+		writeOutboxMessage(tmpDir, bid, aid, { from: aid, type: "reply", content: "pending reply" });
+		const history = readOutboxHistory(tmpDir, bid, aid);
+		expect(history.length).toBe(1);
+		expect(history[0].acked).toBe(false);
+		expect(history[0].message.content).toBe("pending reply");
+	});
+
+	it("9.2: readOutboxHistory includes processed (acked) messages", () => {
+		const msg = writeOutboxMessage(tmpDir, bid, aid, {
+			from: aid,
+			type: "reply",
+			content: "will ack",
+		});
+		ackOutboxMessage(tmpDir, bid, aid, msg.id);
+		const history = readOutboxHistory(tmpDir, bid, aid);
+		expect(history.length).toBe(1);
+		expect(history[0].acked).toBe(true);
+		expect(history[0].message.content).toBe("will ack");
+	});
+
+	it("9.3: readOutboxHistory returns both pending and processed sorted by timestamp", () => {
+		writeOutboxMessage(tmpDir, bid, aid, { from: aid, type: "reply", content: "first" });
+		const msg2 = writeOutboxMessage(tmpDir, bid, aid, {
+			from: aid,
+			type: "escalate",
+			content: "second",
+		});
+		ackOutboxMessage(tmpDir, bid, aid, msg2.id);
+		const history = readOutboxHistory(tmpDir, bid, aid);
+		expect(history.length).toBe(2);
+		const acked = history.filter((h) => h.acked);
+		const pending = history.filter((h) => !h.acked);
+		expect(acked.length).toBe(1);
+		expect(pending.length).toBe(1);
+	});
+
+	it("9.4: readOutboxHistory returns empty for non-existent agent", () => {
+		expect(readOutboxHistory(tmpDir, bid, "nonexistent")).toEqual([]);
+	});
+});
+
+// ── 10.x: discoverMailboxAgentIds (TP-091 durable discovery) ───────
+
+describe("10.x: discoverMailboxAgentIds", () => {
+	const bid = "20260330T091500";
+
+	it("10.1: discovers agent dirs in mailbox root", () => {
+		// Create outbox for two agents
+		writeOutboxMessage(tmpDir, bid, "agent-a", { from: "agent-a", type: "reply", content: "a" });
+		writeOutboxMessage(tmpDir, bid, "agent-b", { from: "agent-b", type: "escalate", content: "b" });
+		const ids = discoverMailboxAgentIds(tmpDir, bid);
+		expect(ids).toContain("agent-a");
+		expect(ids).toContain("agent-b");
+	});
+
+	it("10.2: excludes _broadcast directory", () => {
+		writeBroadcastMessage(tmpDir, bid, { from: "supervisor", type: "info", content: "hi" });
+		const ids = discoverMailboxAgentIds(tmpDir, bid);
+		expect(ids).not.toContain("_broadcast");
+	});
+
+	it("10.3: returns empty for non-existent batch", () => {
+		expect(discoverMailboxAgentIds(tmpDir, "nonexistent")).toEqual([]);
+	});
+
+	it("10.4: includes agent with only processed outbox (no longer active)", () => {
+		const msg = writeOutboxMessage(tmpDir, bid, "dead-agent", {
+			from: "dead-agent",
+			type: "reply",
+			content: "old",
+		});
+		ackOutboxMessage(tmpDir, bid, "dead-agent", msg.id);
+		const ids = discoverMailboxAgentIds(tmpDir, bid);
+		expect(ids).toContain("dead-agent");
+	});
+});
+
+// ── 11.x: doReadAgentReplies durable discovery (source contract, TP-091) ──
+
+describe("11.x: read_agent_replies includes inactive agent history", () => {
+	it("11.1: doReadAgentReplies unions live + mailbox history IDs", () => {
+		const fnIdx = extensionSrc.indexOf("function doReadAgentReplies(");
+		const block = extensionSrc.slice(fnIdx, fnIdx + 2000);
+		// Must call discoverMailboxAgentIds in the omitted-from path
+		expect(block).toContain("discoverMailboxAgentIds");
+		// Must union/dedupe with collectKnownAgentIds
+		expect(block).toContain("collectKnownAgentIds");
+		expect(block).toContain("new Set");
+	});
+});
+
+// ── 12.x: Dashboard source contract tests (TP-107 remediation) ───────
+
+describe("12.x: Dashboard V2 source contracts", () => {
+	const appSrc = readFileSync(join(__dirname, "..", "..", "dashboard", "public", "app.js"), "utf-8");
+
+	it("12.1: resolveV2AgentId regex uses \\d+ not d+", () => {
+		const fnIdx = appSrc.indexOf("function resolveV2AgentId");
+		const block = appSrc.slice(fnIdx, fnIdx + 1000);
+		// Must contain the correct regex /lane-(\d+)/
+		// In source: the literal chars are backslash-d, which in a JS string is "\d"
+		expect(block).toContain("/lane-(\\d+)/");
+	});
+
+	it("12.2: resolveV2AgentId regex matches lane-12", () => {
+		// Validate the regex itself
+		const m = "orch-foo-lane-12".match(/lane-(\d+)/);
+		expect(m).not.toBe(null);
+		expect(m![1]).toBe("12");
+	});
+
+	it("12.3: mergeV2LaneSnapshot reads nested worker.* fields", () => {
+		const fnIdx = appSrc.indexOf("function mergeV2LaneSnapshot");
+		const block = appSrc.slice(fnIdx, fnIdx + 800);
+		// Must read from nested v2snap.worker (not flat v2snap.workerStatus)
+		const bigBlock = appSrc.slice(fnIdx, fnIdx + 1200);
+		expect(bigBlock).toContain("v2snap.worker");
+		expect(bigBlock).toContain("w.status");
+		expect(bigBlock).toContain("w.elapsedMs");
+		expect(bigBlock).toContain("w.contextPct");
+		expect(bigBlock).toContain("w.toolCalls");
+		expect(bigBlock).toContain("w.costUsd");
+		// Must NOT read nonexistent flat keys
+		expect(bigBlock).not.toContain("v2snap.workerStatus");
+		expect(bigBlock).not.toContain("v2snap.workerElapsed");
+	});
+
+	it("12.4: V2 event renderer uses stable cursor, not index count", () => {
+		const fnIdx = appSrc.indexOf("function renderV2AgentEvents");
+		const block = appSrc.slice(fnIdx, fnIdx + 2000);
+		// Must use cursor-based approach, not v2EventsRendered count
+		expect(block).toContain("v2LastCursor");
+		expect(block).toContain("v2EventSignature");
+		// Must NOT use old index-based approach
+		expect(block).not.toContain("v2EventsRendered");
+	});
+
+	it("12.5: V2 cursor handles sliding window — new tail events appended", () => {
+		const fnIdx = appSrc.indexOf("function renderV2AgentEvents");
+		const block = appSrc.slice(fnIdx, fnIdx + 2000);
+		// Must have: cursor not found -> full re-render logic
+		expect(block).toContain("cursorIdx === -1");
+		// Must have: append only new events after cursor
+		expect(block).toContain("events.slice(cursorIdx + 1)");
+	});
+
+	it("12.6: broadcast fallback direction shows recipient, not _broadcast", () => {
+		const fnIdx = appSrc.indexOf("function renderMailboxDirMessage");
+		const block = appSrc.slice(fnIdx, fnIdx + 800);
+		// Must check _isBroadcast + _agentDir to show recipient identity
+		expect(block).toContain("_isBroadcast");
+		expect(block).toContain("_agentDir !== '_broadcast'");
+		expect(block).toContain("(broadcast)");
+	});
+
+	it("12.7: server fallback marks agent-dir broadcast rows with _isBroadcast", () => {
+		const serverSrc = readFileSync(join(__dirname, "..", "..", "dashboard", "server.cjs"), "utf-8");
+		expect(serverSrc).toContain('const isBroadcast = msg.to === "_broadcast"');
+		expect(serverSrc).toContain("_isBroadcast: isBroadcast");
+	});
+
+	it("12.8: renderSummary uses Runtime V2 lane snapshots for token/cost aggregation", () => {
+		const fnIdx = appSrc.indexOf("function renderSummary");
+		const block = appSrc.slice(fnIdx, fnIdx + 8000);
+		expect(block).toContain("runtimeLaneSnapshots");
+		expect(block).toContain("const v2Snaps = Object.values(runtimeLaneSnapshots)");
+		expect(block).toContain("snap?.worker");
+		expect(block).toContain("w.inputTokens");
+		expect(block).toContain("w.costUsd");
+	});
+});

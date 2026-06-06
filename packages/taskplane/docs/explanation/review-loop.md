@@ -1,0 +1,207 @@
+# Review Loop
+
+Taskplane uses an explicit reviewer loop to reduce single-agent blind spots.
+
+## Why a review loop exists
+
+Worker agents optimize for progress. Reviewers optimize for quality and correctness.
+
+Using a separate reviewer model improves:
+
+- defect detection
+- standards compliance
+- confidence before merge
+
+---
+
+## Review actors
+
+- **Worker**: implements step checklist items
+- **Reviewer**: inspects plan/code and writes structured verdict file
+
+Reviewer output is file-based and must be written to disk for orchestration logic to consume it.
+
+---
+
+## Verdicts
+
+Reviewer verdicts:
+
+- `APPROVE`
+- `REVISE`
+- `RETHINK`
+- `UNAVAILABLE`
+
+Interpretation:
+
+- `APPROVE`: continue to next step
+- `REVISE`: worker addresses feedback inline (same context), then proceeds
+- `RETHINK`: plan concerns — worker reconsiders approach
+- `UNAVAILABLE`: reviewer failed to produce output — worker proceeds with caution
+
+---
+
+## Review levels (task metadata)
+
+Task `Review Level` controls review rigor:
+
+- `0`: no review loop
+- `1`: plan review only
+- `2`: plan + code review
+- `3`: full rigor policy level (project may treat as highest scrutiny)
+
+**Exception:** Step 0 (Preflight) and the final step (Documentation & Delivery)
+always skip both plan and code reviews, regardless of review level. These
+low-risk steps don't benefit from cross-model review.
+
+---
+
+## Worker-driven inline reviews (v0.9.0+)
+
+Reviews are **worker-driven**: the worker agent invokes the `review_step` tool
+at step boundaries, based on the task's review level. The reviewer spawns as
+a subprocess with full telemetry, and the worker's context is preserved across
+the tool call.
+
+```text
+Worker executing all steps in one context:
+
+  For each substantive step (not Step 0 or final step):
+    if review level ≥ 1:
+      call review_step(step=N, type="plan")    → plan feedback
+    implement the step
+    commit changes
+    if review level ≥ 2:
+      call review_step(step=N, type="code", baseline=<pre-step SHA>)    → code feedback
+      if REVISE: address feedback, commit fixes
+    proceed to next step
+```
+
+Key behaviors:
+
+- **Worker keeps context** — reviews happen mid-execution via a tool call.
+  The worker doesn't lose its accumulated understanding of the codebase.
+- **Reviewer spawns as subprocess** — a dedicated reviewer agent (e.g.,
+  `orch-lane-1-reviewer`) with structured telemetry visible in the dashboard.
+- **REVISE handled inline** — the worker reads the review file in `.reviews/`
+  and addresses feedback immediately, in the same context that wrote the code.
+- **Plan reviews** run before implementation to catch design issues early.
+- **Code reviews** receive a baseline commit SHA so the reviewer sees only
+  the step's changes (not the full cumulative diff).
+- **Low-risk steps** (Step 0/Preflight and final step) skip all reviews
+  automatically — both in the worker's review protocol and as a safety net
+  in the tool handler.
+
+### Dashboard visibility
+
+During a review, the dashboard shows a **reviewer sub-row** below the active
+task with live metrics: elapsed time, tool count, last tool, cost, and context%.
+The worker row shows `[awaiting review]` until the reviewer finishes.
+
+### Review availability
+
+The `review_step` tool is registered during orchestrated execution (`/orch`).
+Reviews are an integral part of the orchestrator’s worker/reviewer loop and
+are configured via the project’s `taskplane-config.json`.
+
+---
+
+## Persistent reviewer context (v0.13.0+)
+
+By default, the reviewer is a **persistent agent** that stays alive across all
+`review_step` calls for a single task. This preserves the reviewer's accumulated
+context — it remembers what it reviewed in earlier steps and can reference
+previous findings (e.g., "I flagged X in Step 2's plan — checking if addressed").
+
+### How it works
+
+1. **First `review_step` call**: spawns a reviewer subprocess with the
+   `reviewer-extension.ts` loaded. The extension registers a `wait_for_review`
+   tool that blocks (via filesystem polling) until a review request arrives.
+2. **Subsequent calls**: the task-runner writes a request file and a signal file
+   to `.reviews/`. The persistent reviewer picks up the signal, reads the
+   request, performs the review, and calls `wait_for_review` again.
+3. **Task completion**: the task-runner writes a `.review-shutdown` signal. The
+   reviewer exits cleanly on the next poll cycle. If it doesn't exit within
+   the grace period (10s), the session is killed.
+
+### Signal protocol
+
+- **Request files**: `.reviews/request-R00N.md` — review request content
+- **Signal files**: `.reviews/.review-signal-NNN` — contains the request filename
+- **Shutdown**: `.reviews/.review-shutdown` — signals the reviewer to exit
+- **Verdict files**: `.reviews/R00N-{type}-step{N}.md` — reviewer output (same as before)
+
+### Fallback to fresh spawn
+
+If the persistent reviewer session dies (context limit, crash, timeout), the
+task-runner detects the dead session and falls back to spawning a fresh reviewer
+for that specific review — the same single-shot behavior used before persistent
+mode. This fallback is logged for visibility.
+
+### Reliability defenses (v0.18.2+)
+
+The persistent reviewer includes multiple reliability layers:
+
+- **Explicit tool instructions**: The reviewer template and spawn prompt
+  unambiguously instruct the model to call `wait_for_review` as a registered
+  extension tool (not via `bash` or shell). Some models (e.g., OpenAI Codex
+  variants) previously called it via bash, causing silent failures.
+- **Early-exit detection**: If the reviewer exits within 30 seconds of spawn
+  without producing a verdict, the task-runner treats this as a tool
+  compatibility failure and immediately falls back to fresh-spawn mode instead
+  of waiting for the 30-minute verdict timeout.
+- **Verdict extraction tolerance**: The `extractVerdict` function tolerates
+  non-standard verdict formats (e.g., "Changes requested" → REVISE, "Looks
+  good" → APPROVE) so models that don't use the exact `### Verdict: X` format
+  still produce usable verdicts.
+- **Graceful double-failure skip**: If both persistent and fallback reviewers
+  fail, the task continues with a clear operator notification in STATUS.md.
+  Reviews are quality assurance, not a blocking gate.
+
+### Benefits
+
+- **Context preservation**: reviewer remembers earlier reviews and code patterns
+- **Faster reviews**: no re-loading of codebase context for each review
+- **Cost savings**: the reviewer's system prompt and codebase understanding are
+  cached in context across reviews
+- **Cross-step awareness**: reviewer can detect regressions and verify that
+  earlier feedback was addressed
+
+---
+
+## Review artifacts
+
+Typical on-disk artifacts:
+
+- `.reviews/` directory in task folder
+- `request-R00N.md` — generated review request
+- `R00N-plan-stepN.md` / `R00N-code-stepN.md` — reviewer output with verdict
+- Review rows appended to `STATUS.md` Reviews table
+
+This keeps the audit trail local to the task.
+
+---
+
+## Design tradeoffs
+
+Benefits:
+
+- catches mistakes before merge
+- enforces standards consistently
+- worker addresses REVISE feedback with full context (no re-hydration)
+- reviewer activity visible in dashboard
+
+Costs:
+
+- additional tokens/time per step
+- reviewer model cost (mitigated by skipping low-risk steps)
+
+Projects tune this via review levels and review-cycle limits.
+
+---
+
+## Related
+
+- [Execution Model](execution-model.md)
+- [Task Format Reference](../reference/task-format.md)

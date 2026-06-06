@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>V7 — Mailbox protocol</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  .topology {
+    display: grid;
+    grid-template-columns: 200px 1fr 200px;
+    gap: 28px;
+    align-items: stretch;
+    margin-bottom: 40px;
+  }
+  .actor {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 22px 18px;
+    text-align: center;
+    border-top: 3px solid currentColor;
+  }
+  .actor.supervisor { color: var(--purple); }
+  .actor.agent { color: var(--green); }
+  .actor-name {
+    font-family: var(--mono);
+    font-size: var(--fs-2xl);
+    color: var(--text);
+    margin-bottom: 6px;
+  }
+  .actor-role {
+    font-family: var(--mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: currentColor;
+    margin-bottom: 18px;
+  }
+  .actor-note {
+    font-size: var(--fs-sm);
+    color: var(--text-dim);
+    line-height: 1.55;
+  }
+
+  .mailbox {
+    background: var(--surface-2);
+    border: 1px dashed var(--border);
+    border-radius: 10px;
+    padding: 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .mailbox-title {
+    font-family: var(--mono);
+    font-size: var(--fs-sm);
+    color: var(--text-faint);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .lane {
+    display: grid;
+    grid-template-columns: 90px 1fr;
+    gap: 12px;
+    align-items: center;
+  }
+  .lane-label {
+    font-family: var(--mono);
+    font-size: var(--fs-sm);
+    color: var(--text-faint);
+    text-align: right;
+  }
+  .msg {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-family: var(--mono);
+    font-size: var(--fs-sm);
+    color: var(--text);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .msg .from-to { color: var(--text-faint); }
+  .msg .body { color: var(--text); }
+  .msg.in { border-left: 3px solid var(--purple); }
+  .msg.out { border-left: 3px solid var(--green); }
+  .msg.bc { border-left: 3px solid var(--amber); }
+  .msg.ack { border-left: 3px solid var(--text-faint); opacity: 0.7; }
+
+  .tree {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px 28px;
+    font-family: var(--mono);
+    font-size: var(--fs-md);
+    line-height: 1.85;
+    color: var(--text);
+    margin-bottom: 36px;
+  }
+  .tree .root { color: var(--blue); }
+  .tree .dir { color: var(--purple); }
+  .tree .file { color: var(--text); }
+  .tree .com { color: var(--text-faint); }
+  .tree .dim { color: var(--text-faint); }
+
+  .props {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  .prop {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 16px;
+    border-top: 2px solid var(--green);
+  }
+  .prop-name {
+    font-family: var(--mono);
+    font-size: var(--fs-sm);
+    color: var(--green);
+    margin-bottom: 4px;
+  }
+  .prop-desc {
+    font-size: var(--fs-sm);
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+
+  /* Mobile: stack the 3-col topology (supervisor / mailbox / agent) and
+     drop the 4-col props grid to 2 columns. */
+  @media (max-width: 900px) {
+    .props { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 700px) {
+    .topology { grid-template-columns: 1fr; gap: 18px; }
+    .props    { grid-template-columns: 1fr; }
+    /* Tighten the inbox/outbox label column on phone. */
+    .lane     { grid-template-columns: 70px 1fr; gap: 10px; }
+  }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="eyebrow">
+      <span>7 · Steering</span>
+      <img class="eyebrow-logo" src="taskplane-word-white.svg" alt="Taskplane">
+      <nav class="page-nav" aria-label="Page navigation">
+        <a href="https://github.com/HenryLach/taskplane" target="_blank" rel="noopener" aria-label="Taskplane repository" title="Taskplane repository"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" role="img"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a>
+        <a href="06-cross-model-review.html" aria-label="Previous">&larr;</a>
+        <a href="index.html" aria-label="Index">&#9675;</a>
+        <a href="08-waves-lanes-worktrees.html" aria-label="Next">&rarr;</a>
+      </nav>
+    </div>
+    <h1>The file-based mailbox</h1>
+    <p class="subtitle">The supervisor and a running agent share a mailbox directory. Files in, files out, audit trail in the middle. Zero deps, cross-platform, survives crashes.</p>
+
+    <div class="topology">
+      <div class="actor supervisor">
+        <div class="actor-name">supervisor</div>
+        <div class="actor-role">writes inbox</div>
+        <div class="actor-note">send_agent_message · broadcast_message · read_agent_replies</div>
+      </div>
+
+      <div class="mailbox">
+        <div class="mailbox-title">.pi/mailbox/{batchId}/{session}/</div>
+        <div class="lane">
+          <div class="lane-label">inbox/</div>
+          <div class="msg in"><span class="from-to">supervisor → agent</span> <span class="body">"call review_step(plan) first"</span></div>
+        </div>
+        <div class="lane">
+          <div class="lane-label">ack/</div>
+          <div class="msg ack"><span class="from-to">processed</span> <span class="body">moved on agent next turn</span></div>
+        </div>
+        <div class="lane">
+          <div class="lane-label">outbox/</div>
+          <div class="msg out"><span class="from-to">agent → supervisor</span> <span class="body">"blocked: missing repo config"</span></div>
+        </div>
+        <div class="lane">
+          <div class="lane-label">_broadcast/</div>
+          <div class="msg bc"><span class="from-to">supervisor → all</span> <span class="body">"wrap up — context budget tight"</span></div>
+        </div>
+      </div>
+
+      <div class="actor agent">
+        <div class="actor-name">agent</div>
+        <div class="actor-role">reads inbox</div>
+        <div class="actor-note">rpc-wrapper injects messages via the steer command at turn boundaries</div>
+      </div>
+    </div>
+
+    <div class="tree">
+      <div><span class="root">.pi/mailbox/</span><span class="com">                                  # batch-scoped root — stale msgs structurally impossible</span></div>
+      <div>└── <span class="dir">20260514T103207/</span><span class="com">                       # {batchId}</span></div>
+      <div>    ├── <span class="dir">orch-henrylach-lane-1/</span></div>
+      <div>    │   ├── <span class="dir">inbox/</span> <span class="file">1774744971303-a7f2c.msg.json</span></div>
+      <div>    │   ├── <span class="dir">ack/</span>   <span class="file">1774744928110-91ce4.msg.json</span></div>
+      <div>    │   └── <span class="dir">outbox/</span> <span class="file">1774744961200-ad21e.msg.json</span></div>
+      <div>    ├── <span class="dir">orch-henrylach-lane-2/</span> <span class="dim">…</span></div>
+      <div>    └── <span class="dir">_broadcast/</span></div>
+      <div>        └── <span class="dir">inbox/</span> <span class="file">1774744990001-b04f7.msg.json</span> <span class="com">    # checked by every agent</span></div>
+    </div>
+
+    <div class="props">
+      <div class="prop">
+        <div class="prop-name">reliable</div>
+        <div class="prop-desc">batch-scoped paths, atomic moves to ack, no message ever lost or misdelivered.</div>
+      </div>
+      <div class="prop">
+        <div class="prop-name">debuggable</div>
+        <div class="prop-desc">cat the inbox. you can see exactly what the supervisor told an agent and when.</div>
+      </div>
+      <div class="prop">
+        <div class="prop-name">bidirectional</div>
+        <div class="prop-desc">agents reply into outbox/ — the engine polls and surfaces alerts to the supervisor.</div>
+      </div>
+      <div class="prop">
+        <div class="prop-name">portable</div>
+        <div class="prop-desc">windows, macOS, linux — same protocol. no sockets, no named pipes, no daemon.</div>
+      </div>
+    </div>
+  </div>
+<script src="nav.js"></script>
+</body>
+</html>

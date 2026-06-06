@@ -1,0 +1,17 @@
+{
+  "// NOTE": "Pi extensions are runtime-transpiled by pi's bundler. This tsconfig is for editor/CI type-checking only. Full tsc --noEmit will report module resolution errors for @mariozechner/* packages (globally installed, not in node_modules).",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": false,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "noImplicitAny": false,
+    "typeRoots": ["../web/node_modules/@types"],
+    "baseUrl": "."
+  },
+  "include": ["task-orchestrator.ts"],
+  "exclude": ["tests"]
+}

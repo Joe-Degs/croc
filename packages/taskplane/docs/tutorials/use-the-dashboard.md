@@ -1,0 +1,161 @@
+# Use the Dashboard
+
+Taskplane includes a web dashboard for monitoring orchestration in real time.
+
+## What it shows
+
+- batch phase and summary counters
+- wave/lane progress
+- task-level status and checkbox progress (from `STATUS.md`)
+- lane sidecar state (`.pi/lane-state-*.json`)
+- batch history (`.pi/batch-history.json`)
+- repo-aware filtering and grouping (workspace mode)
+- supervisor status, recovery actions, and conversation history (when supervisor is active)
+
+---
+
+## Start the dashboard
+
+From your project root:
+
+```bash
+taskplane dashboard
+```
+
+Defaults:
+
+- port: `8099`
+- root: current directory
+- browser auto-opens unless disabled
+
+Options:
+
+```bash
+taskplane dashboard --port 3000
+taskplane dashboard --no-open
+```
+
+---
+
+## Typical workflow
+
+Terminal A:
+
+```bash
+taskplane dashboard
+```
+
+Terminal B:
+
+```bash
+pi
+```
+
+Inside pi:
+
+```text
+/orch all
+```
+
+Dashboard updates live while orchestration runs.
+
+---
+
+## Supervisor panel
+
+When the supervisor agent is active, the dashboard shows a collapsible
+**Supervisor** panel with:
+
+- **Status indicator** — active/inactive badge with autonomy level and heartbeat age
+- **Recovery actions** — chronological timeline of supervisor interventions (from `actions.jsonl`)
+- **Conversation history** — operator ↔ supervisor messages
+- **Batch summary** — rendered when available (post-batch)
+
+The panel appears automatically when supervisor data is available. For
+pre-supervisor batches (or when no supervisor files exist), the panel is
+hidden — no extra clutter.
+
+---
+
+## Data sources
+
+Dashboard server reads:
+
+- `.pi/batch-state.json`
+- `.pi/lane-state-*.json`
+- task `STATUS.md` files
+- `.pi/batch-history.json`
+- `.pi/supervisor/lock.json` (supervisor status)
+- `.pi/supervisor/actions.jsonl` (recovery actions)
+- `.pi/supervisor/events.jsonl` (supervisor events)
+
+Updates are pushed to browser clients via Server-Sent Events (SSE).
+
+---
+
+## Workspace mode (multi-repo)
+
+When orchestrating across multiple repositories (workspace mode), the
+dashboard automatically shows repo-aware features:
+
+- **Repo badges** appear on lanes and tasks, showing which repo each belongs to
+- **Repo filter dropdown** lets you focus on a single repository
+- **Merge outcomes** are grouped per repo, showing individual branch/status details
+- **Per-segment progress pills** appear under each multi-segment task row,
+  showing one pill per segment with a status icon (✅ succeeded · ⏳ running ·
+  ⬚ pending · ❌ failed · ⏸ stalled · ↷ skipped) and the segment’s repo ID.
+  The currently-executing segment is highlighted so you can see which segment
+  the lane is working on right now. Single-segment tasks render no pill row,
+  so non-segmented batches look identical to before.
+
+These features activate when the batch is in workspace mode and involves 2+
+distinct repositories. For single-repo batches, the dashboard looks and
+behaves exactly as before — no extra clutter.
+
+The summary bar and footer always show global batch progress regardless of
+any active repo filter.
+
+---
+
+## When to use dashboard vs terminal
+
+Use dashboard when you want:
+
+- cross-lane overview
+- visual progress tracking
+- quick health checks during long runs
+
+Use terminal output when you want:
+
+- command interactions (`/orch-*`, `/task-*`)
+- focused debugging of one lane/session
+
+They complement each other.
+
+---
+
+## Troubleshooting
+
+### Dashboard doesn’t open
+
+Open manually in browser:
+
+- `http://localhost:8099` (or chosen port)
+
+### No live updates
+
+Check that `.pi/` state files are changing during batch execution.
+
+### Port already in use
+
+Run with another port:
+
+```bash
+taskplane dashboard --port 3010
+```
+
+---
+
+## Next step
+
+- [Pause, Resume, or Abort a Batch](../how-to/pause-resume-abort-a-batch.md)

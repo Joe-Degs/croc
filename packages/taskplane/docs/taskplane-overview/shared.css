@@ -1,0 +1,317 @@
+/* ============================================================================
+   Taskplane intro video · shared visual stylesheet
+   ----------------------------------------------------------------------------
+   Edit this file to make universal changes to every visual at once.
+   Each per-visual HTML file imports this file and adds its own
+   layout/component styles inline.
+
+   Sections:
+     1. Design tokens          (colors, fonts, type scale, spacing)
+        1a. Global scale knob  (single value resizes text + page padding)
+        1b. Surfaces + text
+        1c. Accents
+        1d. Fonts
+        1e. Type scale (size ladder + semantic aliases)
+        1f. Page padding / frame width
+        1g. Radii
+     2. Reset                  (box-sizing, margin/padding zeroing)
+     3. Base                   (body, html backgrounds)
+     4. Frame                  (centered container)
+     5. Typography             (.eyebrow, h1, .subtitle)
+   ============================================================================ */
+
+
+/* ----------------------------------------------------------------------------
+   1. Design tokens
+   ---------------------------------------------------------------------------- */
+:root {
+
+  /* ----- 1a. Scale knob ----------------------------------------------------
+     One number to enlarge or shrink everything controlled by shared.css.
+     Per-file hardcoded paddings/gaps are NOT affected — text gets bigger
+     while containers keep their original geometry. That's usually what you
+     want for "fill the screen" output: text dominates and reads on mobile.
+
+       --scale: 1      → IDE-density (matches original storyboard preview)
+       --scale: 1.5    → 16:9 video-ready · mobile-readable on YouTube  (default)
+       --scale: 1.75   → larger still; some dense visuals (V8, V12) may exceed
+                         1080p height — scroll or zoom Chrome out to compensate
+       --scale: 2      → poster / thumbnail capture
+     -------------------------------------------------------------------------- */
+  --scale: 1.5;
+
+
+  /* ----- 1b. Surfaces + text ----------------------------------------------- */
+  --bg:        #0d1117;
+  --surface:   #161b22;
+  --surface-2: #1c2128;
+  --border:    #30363d;
+
+  --text:       #e6edf3;   /* primary — high contrast */
+  --text-dim:   #c9d1d9;   /* secondary — was #8b949e, bumped for mobile/video */
+  --text-faint: #a3aeb8;   /* tertiary  — was #6e7681, bumped for mobile/video */
+
+
+  /* ----- 1c. Accents ------------------------------------------------------- */
+  --green:  #7ee787;
+  --amber:  #f0b35e;
+  --blue:   #79c0ff;
+  --red:    #ff7b72;
+  --purple: #d2a8ff;
+  --pink:   #ff9bb8;
+
+
+  /* ----- 1d. Fonts --------------------------------------------------------- */
+  --mono: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  --sans: 'Inter', -apple-system, system-ui, sans-serif;
+
+
+  /* ----- 1e. Type scale ---------------------------------------------------
+     The base values (9px, 10px, 11px, …) are the "natural" sizes. They get
+     multiplied by --scale at runtime, so the ratios are preserved. Tweak a
+     base value to drift just that rung without affecting the rest.
+     -------------------------------------------------------------------------- */
+
+  /* size ladder */
+  --fs-3xs:  calc( 9px * var(--scale));   /* tiny badges (home-badge) */
+  --fs-2xs:  calc(10px * var(--scale));   /* micro labels, table headers */
+  --fs-xs:   calc(11px * var(--scale));   /* tags, lane labels, panel labels */
+  --fs-sm:   calc(12px * var(--scale));   /* small body, code, file lines */
+  --fs-md:   calc(13px * var(--scale));   /* default body, eyebrow */
+  --fs-lg:   calc(14px * var(--scale));   /* descriptions, taglines */
+  --fs-xl:   calc(16px * var(--scale));   /* subtitle, marker pins */
+  --fs-2xl:  calc(18px * var(--scale));   /* medium card titles, agent names */
+  --fs-3xl:  calc(20px * var(--scale));   /* large numeric values, panel titles */
+  --fs-4xl:  calc(22px * var(--scale));   /* hero inline names, actor names */
+  --fs-5xl:  calc(26px * var(--scale));   /* hero display titles inside cards */
+  --fs-6xl:  calc(36px * var(--scale));   /* page h1 */
+  --fs-icon: calc(24px * var(--scale));   /* large icon glyphs (DAG arrows) */
+
+  /* semantic aliases (used by base styles below) */
+  --fs-h1:       var(--fs-6xl);
+  --fs-eyebrow:  var(--fs-md);
+  --fs-subtitle: var(--fs-xl);
+
+
+  /* ----- 1f. Page padding / frame width ------------------------------------ */
+  --page-pad-y: calc(32px * var(--scale));   /* top/bottom body padding */
+  --page-pad-x: calc(40px * var(--scale));   /* left/right body padding */
+  --frame-max:  1820px;                      /* hard cap on content width (16:9 ≈ 1920) */
+  --subtitle-mb: calc(28px * var(--scale));  /* space below h1 subtitle */
+
+
+  /* ----- 1g. Radii --------------------------------------------------------- */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 10px;
+  --r-2xl: 12px;
+}
+
+
+/* ----------------------------------------------------------------------------
+   2. Reset
+   ---------------------------------------------------------------------------- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* Global media safety: keep images/SVGs from busting their containers on
+   narrow viewports. Per-page rules that set explicit width/height still win
+   because of selector specificity, except height: auto, which is what we
+   want for fluid scaling. */
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+
+
+/* ----------------------------------------------------------------------------
+   3. Base
+   ---------------------------------------------------------------------------- */
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+}
+
+body {
+  min-height: 100vh;
+  /* No top padding: the sticky .eyebrow sits flush against the viewport
+     top from page load, so it's always in its docked position. Side and
+     bottom padding remain. */
+  padding: 0 var(--page-pad-x) var(--page-pad-y);
+}
+
+
+/* ----------------------------------------------------------------------------
+   4. Frame
+   ---------------------------------------------------------------------------- */
+.frame {
+  max-width: var(--frame-max);
+  margin: 0 auto;
+}
+
+
+/* ----------------------------------------------------------------------------
+   5. Typography
+   ---------------------------------------------------------------------------- */
+.eyebrow {
+  font-family: var(--mono);
+  color: var(--green);
+  font-size: var(--fs-eyebrow);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+  /* Three-column grid: title (left) · wordmark (center) · nav (right).
+     1fr / auto / 1fr keeps the wordmark perfectly centered regardless of
+     how wide the title or nav columns end up. */
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 16px;
+
+  /* Docked at the top of the viewport so the nav buttons are always
+     reachable. position: sticky keeps the eyebrow in normal flow until
+     the page scrolls past it, then pins it to top: 0. */
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding-block: 10px;
+}
+.eyebrow > :first-child { justify-self: start; }
+.eyebrow > .page-nav    { justify-self: end; }
+
+/* Wordmark centered in the eyebrow. Height matches the nav-arrow line-height
+   (--fs-lg) so adding the logo does NOT grow the eyebrow row. */
+.eyebrow-logo {
+  display: block;
+  height: var(--fs-lg);
+  width: auto;
+  justify-self: center;
+}
+
+/* Per-page navigation: prev / index / next. Lives inside .eyebrow.
+   Sized large (~2x the title) and tinted green so the controls read as
+   primary actions on every viewport, with 44x44 hit areas for touch. */
+.page-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: normal;
+  text-transform: none;
+  font-size: calc(var(--fs-lg) * 2);
+  line-height: 1;
+}
+.page-nav a,
+.page-nav span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 4px 6px;
+  color: var(--green);
+  text-decoration: none;
+  transition: color 0.15s ease, transform 0.15s ease;
+}
+.page-nav a svg {
+  /* GitHub icon: scale to track the nav font-size so it sits at the same
+     visual weight as the arrow glyphs and follows the green/hover color
+     via fill="currentColor". 0.85em accounts for the SVG filling its full
+     viewBox while text glyphs leave intrinsic side bearings. */
+  width: 0.85em;
+  height: 0.85em;
+  display: block;
+}
+.page-nav a:hover {
+  color: var(--text);
+  transform: translateY(-1px);
+}
+.page-nav a:active {
+  transform: translateY(0);
+}
+.page-nav .disabled {
+  color: var(--text-faint);
+  opacity: 0.35;
+  cursor: default;
+}
+
+h1 {
+  font-size: var(--fs-h1);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-bottom: 8px;
+}
+
+.subtitle {
+  color: var(--text-dim);
+  font-size: var(--fs-subtitle);
+  margin-bottom: var(--subtitle-mb);
+  /* Subtitle spans the full frame width — no soft cap. */
+  max-width: 100%;
+  line-height: 1.55;
+}
+
+
+/* ----------------------------------------------------------------------------
+   6. Responsive (mobile baseline)
+   ----------------------------------------------------------------------------
+   The deck was originally authored at 1820px max-width with --scale: 1.5
+   for 16:9 video frames. These breakpoints retarget it for portrait phones
+   and tablets without a rebuild.
+
+   Two breakpoints:
+     900px : tablet portrait + small landscape
+     700px : phone portrait — also restructures the eyebrow so the wordmark
+             logo doesn't get crushed against the title and nav.
+
+   --scale comes down but is floored at 0.95 — anything smaller starts to
+   make the dense card text microscopic on phones. Page padding shrinks
+   aggressively because every saved pixel matters at <400px viewport widths.
+   ---------------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  :root {
+    --scale:       1.1;
+    --page-pad-x:  20px;
+    --page-pad-y:  24px;
+  }
+}
+
+@media (max-width: 700px) {
+  :root {
+    --scale:       0.95;
+    --page-pad-x:  14px;
+    --page-pad-y:  18px;
+  }
+
+  /* Stack the eyebrow: wordmark on its own row above title + nav.
+     Without this the three items get squeezed into <340px and overflow. */
+  .eyebrow {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "logo  logo"
+      "title nav";
+    row-gap: 8px;
+  }
+  .eyebrow > :first-child  { grid-area: title; justify-self: start; }
+  .eyebrow > .eyebrow-logo { grid-area: logo;  justify-self: center; }
+  .eyebrow > .page-nav     { grid-area: nav;   justify-self: end; }
+
+  /* Heading needs more aggressive size reduction than --scale alone
+     delivers. --fs-h1 at scale 0.95 is still 34px which crowds out
+     everything else on a 375px viewport. */
+  h1 {
+    font-size: calc(26px * var(--scale));
+    line-height: 1.15;
+  }
+}

@@ -1,0 +1,25 @@
+# ── Node / Build ──────────────────────────────────────────────────────
+node_modules/
+dist/
+*.tgz
+
+# ── Project-local (config, agents, state, internal docs) ─────────────
+# Instance-specific files scaffolded by `taskplane init`.
+# Templates live in templates/
+.pi/
+
+# ── Local working directories ─────────────────────────────────────────
+.agents/
+.worktrees/
+.tmp-*.log
+
+# ── OS / Editor ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+.claude/
+.sage-tmp/

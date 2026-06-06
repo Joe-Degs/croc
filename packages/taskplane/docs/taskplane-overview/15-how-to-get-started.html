@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>V15 — Getting started: install and test</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+    margin-bottom: 0px;
+  }
+  .step {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 22px;
+    border-top: 3px solid currentColor;
+    display: flex;
+    flex-direction: column;
+  }
+  .step.s1 { color: var(--green); }
+  .step.s2 { color: var(--amber); }
+  .step.s3 { color: var(--blue); }
+  .step.s4 { color: var(--purple); }
+  .step.s5 { color: var(--pink); }
+  .step.s6 { color: var(--red); }
+  .step.s7 { color: var(--green); }
+  .step.s8 { color: var(--amber); }
+  .step.s9 { color: var(--blue); }
+
+  .step-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .step-num {
+    font-family: var(--mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: currentColor;
+  }
+  .step-where {
+    font-family: var(--mono);
+    font-size: var(--fs-2xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 7px;
+  }
+  .step-title {
+    font-family: var(--mono);
+    font-size: var(--fs-xl);
+    color: var(--text);
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+  .step-desc {
+    font-size: var(--fs-md);
+    color: var(--text-dim);
+    line-height: 1.6;
+    margin-bottom: 16px;
+    flex: 1;
+  }
+  .step-cmd {
+    font-family: var(--mono);
+    font-size: var(--fs-sm);
+    background: var(--surface-2);
+    padding: 10px 14px;
+    border-radius: 4px;
+    color: var(--text);
+    border-left: 2px solid currentColor;
+    margin-top: auto;
+    line-height: 1.7;
+    overflow-wrap: anywhere;
+  }
+  .step-cmd .prompt { color: var(--text-faint); }
+  .step-cmd .com    { color: var(--text-faint); }
+  .step-cmd .kw     { color: currentColor; }
+  .step-cmd .slash  { color: currentColor; }
+
+  .footer-band {
+    padding: 20px 26px;
+    background: var(--surface-2);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: var(--fs-md);
+    color: var(--text-dim);
+    line-height: 1.7;
+    text-align: center;
+  }
+  .footer-band .hl-g { color: var(--green); }
+  .footer-band .hl-b { color: var(--blue); }
+  .footer-band .hl-a { color: var(--amber); }
+
+  /* Mobile: stack the 9 setup-step cards. */
+  @media (max-width: 900px) {
+    .steps { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 700px) {
+    .steps { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="eyebrow">
+      <span>15 · Your first batch</span>
+      <img class="eyebrow-logo" src="taskplane-word-white.svg" alt="Taskplane">
+      <nav class="page-nav" aria-label="Page navigation">
+        <a href="https://github.com/HenryLach/taskplane" target="_blank" rel="noopener" aria-label="Taskplane repository" title="Taskplane repository"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" role="img"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a>
+        <a href="14-pi-capabilities.html" aria-label="Previous">&larr;</a>
+        <a href="index.html" aria-label="Index">&#9675;</a>
+        <a href="16-real-work-playbook.html" aria-label="Next">&rarr;</a>
+      </nav>
+    </div>
+    <h1>Getting started: install and test</h1>
+    <p class="subtitle">Nine steps from zero to a running orchestrated batch. Everything is local — your machine, your keys, your filesystem. The only ongoing cost is your model token bill.</p>
+
+    <div class="steps">
+      <div class="step s1">
+        <div class="step-head">
+          <div class="step-num">01 · install</div>
+          <div class="step-where">shell</div>
+        </div>
+        <div class="step-title">Get Node and pi</div>
+        <div class="step-desc">Install Node (LTS or newer) however you prefer — mise, nvm, or the official installer — then install pi globally from npm. pi is the agent runtime that hosts Taskplane.</div>
+        <div class="step-cmd"><span class="com"># Node first (any installer)</span><br><span class="prompt">$</span> <span class="kw">npm install -g</span> @earendil-works/pi-coding-agent</div>
+      </div>
+
+      <div class="step s2">
+        <div class="step-head">
+          <div class="step-num">02 · configure</div>
+          <div class="step-where">in pi</div>
+        </div>
+        <div class="step-title">Add a model provider</div>
+        <div class="step-desc">Launch pi and configure at least one provider (two is better) — Anthropic, OpenAI, Bedrock, Vertex, Gemini, or local Ollama. pi will prompt you for keys and save them to your user profile.</div>
+        <div class="step-cmd"><span class="prompt">$</span> <span class="kw">pi</span><br><span class="slash">/providers</span> <span class="com"># add at least one, two if possible</span></div>
+      </div>
+
+      <div class="step s3">
+        <div class="step-head">
+          <div class="step-num">03 · install</div>
+          <div class="step-where">shell</div>
+        </div>
+        <div class="step-title">Install Taskplane</div>
+        <div class="step-desc">Install Taskplane globally so pi can discover it as an extension. From this point on, every pi session in any project has access to <code>/orch</code> and the supervisor agent.</div>
+        <div class="step-cmd"><span class="prompt">$</span> <span class="kw">npm install -g</span> taskplane</div>
+      </div>
+
+      <div class="step s4">
+        <div class="step-head">
+          <div class="step-num">04 · project</div>
+          <div class="step-where">shell</div>
+        </div>
+        <div class="step-title">Make a fresh repo</div>
+        <div class="step-desc">Taskplane needs a git repository — lanes commit to branches and worktrees, so git history is the substrate. An empty new repo is the simplest starting point.</div>
+        <div class="step-cmd"><span class="prompt">$</span> <span class="kw">mkdir</span> my-first-batch<br><span class="prompt">$</span> <span class="kw">cd</span> my-first-batch<br><span class="prompt">$</span> <span class="kw">git init</span></div>
+      </div>
+
+      <div class="step s5">
+        <div class="step-head">
+          <div class="step-num">05 · scaffold</div>
+          <div class="step-where">shell</div>
+        </div>
+        <div class="step-title">Initialize Taskplane</div>
+        <div class="step-desc">Drops project scaffolding: a <code>.pi/</code> directory with config, the supervisor agent prompt, a sample task area, and a starter batch you can run end-to-end without writing a single task by hand.</div>
+        <div class="step-cmd"><span class="prompt">$</span> <span class="kw">taskplane init</span></div>
+      </div>
+
+      <div class="step s6">
+        <div class="step-head">
+          <div class="step-num">06 · verify</div>
+          <div class="step-where">shell</div>
+        </div>
+        <div class="step-title">Run doctor</div>
+        <div class="step-desc">Sanity checks: pi version, Node version, Taskplane install path, providers configured, git repo health, scaffolded files present. Fix anything red before you launch a batch.</div>
+        <div class="step-cmd"><span class="prompt">$</span> <span class="kw">taskplane doctor</span></div>
+      </div>
+
+      <div class="step s7">
+        <div class="step-head">
+          <div class="step-num">07 · review</div>
+          <div class="step-where">in pi</div>
+        </div>
+        <div class="step-title">Set a reviewer model</div>
+        <div class="step-desc">Cross-model review is Taskplane's quality gate. Pick a provider/model different from your worker (e.g. worker on Claude, reviewer on GPT). If you only have one provider, skip — you can revisit anytime.</div>
+        <div class="step-cmd"><span class="prompt">$</span> <span class="kw">pi</span><br><span class="slash">/taskplane-settings</span></div>
+      </div>
+
+      <div class="step s8">
+        <div class="step-head">
+          <div class="step-num">08 · run</div>
+          <div class="step-where">in pi</div>
+        </div>
+        <div class="step-title">Launch the sample batch</div>
+        <div class="step-desc">From inside pi, kick off every task in the sample area. Taskplane discovers the DAG, plans waves, spawns lanes in parallel worktrees, runs reviews, and merges wave by wave — all autonomously.</div>
+        <div class="step-cmd"><span class="slash">/orch</span> all</div>
+      </div>
+
+      <div class="step s9">
+        <div class="step-head">
+          <div class="step-num">09 · watch</div>
+          <div class="step-where">shell</div>
+        </div>
+        <div class="step-title">Open the dashboard</div>
+        <div class="step-desc">In a <em>second</em> terminal, launch the live dashboard. Read-only view over disk: lane progress, merge agents, supervisor events, mailbox traffic. Refreshes via SSE. Cannot lie, cannot decide.</div>
+        <div class="step-cmd"><span class="com"># new terminal, same repo</span><br><span class="prompt">$</span> <span class="kw">taskplane dashboard</span></div>
+      </div>
+    </div>
+
+  </div>
+<script src="nav.js"></script>
+</body>
+</html>

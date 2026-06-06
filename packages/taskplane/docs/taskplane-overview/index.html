@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Taskplane Overview</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  a.card {
+    display: block;
+    text-decoration: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 22px;
+    color: inherit;
+    transition: border-color 0.15s, transform 0.15s;
+    border-left: 3px solid currentColor;
+  }
+  a.card:hover { border-color: var(--green); transform: translateY(-2px); }
+
+  /* Highlight the entry-point card so a first-time reader knows where to begin.
+     Visual language mirrors the "critical step" treatment on page 16. */
+  a.card.start-here {
+    background: var(--surface-2);
+    border: 1px solid var(--green);
+    border-left: 3px solid var(--green);
+    box-shadow: 0 0 0 1px rgba(126, 231, 135, 0.15) inset;
+    position: relative;
+  }
+  a.card.start-here .start-badge {
+    position: absolute;
+    top: -10px;
+    right: 14px;
+    background: var(--green);
+    color: var(--bg);
+    font-family: var(--mono);
+    font-size: var(--fs-2xs);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+
+  a.card.c1 { color: var(--green); }
+  a.card.c2 { color: var(--amber); }
+  a.card.c3 { color: var(--blue); }
+  a.card.c4 { color: var(--purple); }
+  a.card.c5 { color: var(--green); }
+  a.card.c6 { color: var(--amber); }
+  a.card.c7 { color: var(--blue); }
+  a.card.c8 { color: var(--purple); }
+  a.card.c9 { color: var(--green); }
+  a.card.c10 { color: var(--amber); }
+  a.card.c11 { color: var(--blue); }
+  a.card.c12 { color: var(--purple); }
+  a.card.c13 { color: var(--green); }
+  a.card.c14 { color: var(--amber); }
+  a.card.c15 { color: var(--blue); }
+  a.card.c16 { color: var(--purple); }
+  a.card.c17 { color: var(--pink); }
+  .num {
+    font-family: var(--mono);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.12em;
+    color: currentColor;
+    margin-bottom: 6px;
+  }
+  .title {
+    font-family: var(--mono);
+    font-size: var(--fs-lg);
+    color: var(--text);
+    margin-bottom: 8px;
+  }
+  .desc {
+    font-size: var(--fs-md);
+    color: var(--text-dim);
+    line-height: 1.55;
+  }
+  .meta {
+    margin-top: 12px;
+    font-family: var(--mono);
+    font-size: var(--fs-xs);
+    color: var(--text-faint);
+  }
+  .footer {
+    margin-top: 40px;
+    padding: 16px 20px;
+    background: var(--surface-2);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: var(--fs-sm);
+    color: var(--text-dim);
+    line-height: 1.7;
+  }
+  .footer .hl { color: var(--green); }
+  .footer code {
+    background: var(--bg);
+    color: var(--text);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  /* Mobile: collapse the 3-column page index. */
+  @media (max-width: 900px) {
+    .grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 700px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="eyebrow">
+      <span>Introduction to Taskplane</span>
+      <img class="eyebrow-logo" src="taskplane-word-white.svg" alt="Taskplane">
+      <nav class="page-nav" aria-label="External links">
+        <a href="https://github.com/HenryLach/taskplane" target="_blank" rel="noopener" aria-label="Taskplane repository" title="Taskplane repository"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" role="img"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a>
+      </nav>
+    </div>
+    <h1>Table of Contents</h1>
+    <p class="subtitle">These 17 pages provide an overview of how Taskplane with Pi dramatically improves AI agent coding outcomes for long-running multi-task orchestration.</p>
+
+    <div class="grid">
+      <a class="card c1 start-here" href="01-origin-timeline.html">
+        <div class="start-badge">★ Start here</div>
+        <div class="num">1</div>
+        <div class="title">Origin timeline</div>
+        <div class="desc">Vibe → Ralph → Parallel Ralph → Taskplane. 1 million lines of lessons.</div>
+      </a>
+      <a class="card c2" href="02-light-factory-vs-dark.html">
+        <div class="num">2</div>
+        <div class="title">Light factory vs dark factory</div>
+        <div class="desc">Two-panel philosophy framing. Visibility is the differentiator.</div>
+      </a>
+      <a class="card c3" href="03-agent-quartet.html">
+        <div class="num">3</div>
+        <div class="title">The agent quartet</div>
+        <div class="desc">Supervisor · worker · reviewer · merger. One row, four jobs.</div>
+      </a>
+      <a class="card c4" href="04-task-packet-anatomy.html">
+        <div class="num">4</div>
+        <div class="title">Anatomy of a task packet</div>
+        <div class="desc">PROMPT.md + STATUS.md side by side with annotated callouts.</div>
+      </a>
+      <a class="card c5" href="05-determinism-spectrum.html">
+        <div class="num">5</div>
+        <div class="title">Determinism spectrum</div>
+        <div class="desc">What Taskplane forces deterministic vs what it leaves to the model.</div>
+      </a>
+      <a class="card c6" href="06-cross-model-review.html">
+        <div class="num">6</div>
+        <div class="title">Cross-model review flow</div>
+        <div class="desc">Opus writes · GPT reads · APPROVE / REVISE / RETHINK / UNAVAILABLE.</div>
+      </a>
+      <a class="card c7" href="07-mailbox-protocol.html">
+        <div class="num">7</div>
+        <div class="title">Mailbox protocol</div>
+        <div class="desc">Inbox · outbox · ack · _broadcast. Supervisor steers via files.</div>
+      </a>
+      <a class="card c8" href="08-waves-lanes-worktrees.html">
+        <div class="num">8</div>
+        <div class="title">Waves, lanes, worktrees</div>
+        <div class="desc">Execution hierarchy with affinity-first lane assignment shown.</div>
+      </a>
+      <a class="card c9" href="09-branching-lifecycle.html">
+        <div class="num">9</div>
+        <div class="title">Branching lifecycle</div>
+        <div class="desc">Working branch → orch branch → lane branches → merge → integrate.</div>
+      </a>
+      <a class="card c10" href="10-semantic-merge.html">
+        <div class="num">10</div>
+        <div class="title">Semantic merge vs git merge</div>
+        <div class="desc">Side-by-side: conflict markers vs LLM-resolved combined intent.</div>
+      </a>
+      <a class="card c11" href="11-polyrepo-segments.html">
+        <div class="num">11</div>
+        <div class="title">Polyrepo segments</div>
+        <div class="desc">Three repos, segment DAG, packet home repo, write isolation.</div>
+      </a>
+      <a class="card c12" href="12-dashboard-visibility.html">
+        <div class="num">12</div>
+        <div class="title">Dashboard visibility map</div>
+        <div class="desc">A view over disk. Read-only. Cannot lie. Cannot decide.</div>
+      </a>
+      <a class="card c13" href="13-why-pi.html">
+        <div class="num">13</div>
+        <div class="title">Why pi?</div>
+        <div class="desc">Three reasons pi is the right foundation: extensible, model-agnostic, open source.</div>
+      </a>
+      <a class="card c14" href="14-pi-capabilities.html">
+        <div class="num">14</div>
+        <div class="title">Pi capabilities</div>
+        <div class="desc">Engineering surface Taskplane builds on: skills, tools, RPC steering, subprocess agents.</div>
+      </a>
+      <a class="card c15" href="15-how-to-get-started.html">
+        <div class="num">15</div>
+        <div class="title">Getting started: install and test</div>
+        <div class="desc">Nine steps from zero to a running batch: install pi + Taskplane, init, doctor, /orch all, dashboard.</div>
+      </a>
+      <a class="card c16" href="16-real-work-playbook.html">
+        <div class="num">16</div>
+        <div class="title">Real-work playbook</div>
+        <div class="desc">Spec → cross-LLM review → supporting docs → AGENTS.md → task packets → /orch-plan. The 30 minutes that decide your batch.</div>
+      </a>
+      <a class="card c17" href="17-sage-companion.html">
+        <div class="num">17</div>
+        <div class="title">Sage — the companion</div>
+        <div class="desc">Ad-hoc and agentic cross-model second opinions. The post-batch quality gate per-step reviews can't deliver.</div>
+      </a>
+    </div>
+  </div>
+<script src="nav.js"></script>
+</body>
+</html>
