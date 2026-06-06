@@ -379,6 +379,7 @@
 					"additionalProperties": false,
 					"properties": {
 						"enabled": { "type": "boolean" },
+						"host": { "type": "string", "minLength": 1 },
 						"port": { "type": "integer", "minimum": 1, "maximum": 65535 },
 						"applyGlobalPreference": { "type": "boolean" },
 						"pidFile": { "type": "string", "minLength": 1 }

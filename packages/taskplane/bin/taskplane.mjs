@@ -3378,10 +3378,13 @@ function cmdDashboard(args) {
 	// Pass through args to server.cjs, adding --root
 	const serverArgs = ["--root", projectRoot];
 
-	// Forward --port and --no-open if provided
+	// Forward dashboard server options if provided
 	for (let i = 0; i < args.length; i++) {
 		if (args[i] === "--port" && args[i + 1]) {
 			serverArgs.push("--port", args[i + 1]);
+			i++;
+		} else if (args[i] === "--host" && args[i + 1]) {
+			serverArgs.push("--host", args[i + 1]);
 			i++;
 		} else if (args[i] === "--no-open") {
 			serverArgs.push("--no-open");
@@ -3438,8 +3441,9 @@ ${c.bold}Init options:${c.reset}
   --dry-run             Show what would be created without writing
 
 ${c.bold}Dashboard options:${c.reset}
-  --port <number>   Port to listen on (default: 8099)
-  --no-open         Don't auto-open browser
+	--host <address>  Host/interface to bind (default: Node.js default)
+	--port <number>   Port to listen on (default: 8099)
+	--no-open         Don't auto-open browser
 
 ${c.bold}Config options:${c.reset}
   --save-as-defaults  Save current project's worker/reviewer/merger model + thinking
@@ -3461,11 +3465,12 @@ ${c.bold}Examples:${c.reset}
   taskplane init --preset full --tasks-root docs/task-management
                                         # Use existing task area path
   taskplane init --dry-run              # Preview what would be created
-  taskplane doctor                      # Check installation health
-  taskplane config --save-as-defaults   # Save current agent settings as init defaults
-  taskplane dashboard                   # Launch web dashboard
-  taskplane dashboard --port 3000       # Dashboard on custom port
-  taskplane uninstall --dry-run         # Preview uninstall actions
+	taskplane doctor                      # Check installation health
+	taskplane config --save-as-defaults   # Save current agent settings as init defaults
+	taskplane dashboard                   # Launch web dashboard
+	taskplane dashboard --port 3000       # Dashboard on custom port
+	taskplane dashboard --host 0.0.0.0    # Bind all interfaces
+	taskplane uninstall --dry-run         # Preview uninstall actions
   taskplane uninstall --package --yes   # Remove project files + package install
 
 ${c.bold}Getting started:${c.reset}

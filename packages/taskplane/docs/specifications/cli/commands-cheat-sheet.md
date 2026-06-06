@@ -16,6 +16,7 @@
 - `--dry-run`
 
 ### `taskplane dashboard` switches
+- `--host <address>` (default: Node.js default)
 - `--port <number>` (default: `8099`)
 - `--no-open`
 
@@ -55,6 +56,7 @@
 - `taskplane init --preset full`
 - `taskplane init --dry-run`
 - `taskplane dashboard --port 3000 --no-open`
+- `taskplane dashboard --host 0.0.0.0 --port 3000 --no-open`
 
 ### In `pi`
 - `/task taskplane-tasks/EXAMPLE-001-hello-world/PROMPT.md`

@@ -773,6 +773,7 @@ Launches the web-based orchestrator dashboard. The dashboard is a zero-dependenc
 taskplane dashboard [options]
 
 Options:
+  --host <address>    Host/interface to bind (default: Node.js default)
   --port <number>     Port to listen on (default: 8099)
   --no-open           Don't auto-open browser
   --root <path>       Project root directory (default: current directory)
@@ -783,7 +784,7 @@ Options:
 The dashboard server:
 1. Locates `dashboard/server.cjs` inside the installed taskplane package
 2. Spawns it with `--root` pointing to the current project directory
-3. Serves the static frontend at `http://localhost:<port>`
+3. Serves the static frontend at `http://<host>:<port>` (`localhost` unless `--host` is set)
 4. Streams batch state via SSE (`/api/stream`) — polls `batch-state.json` + STATUS.md files
 5. Auto-opens the browser (unless `--no-open`)
 

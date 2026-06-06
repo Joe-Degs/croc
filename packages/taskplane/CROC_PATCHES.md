@@ -22,6 +22,7 @@ Local Croc changes should be recorded here so upstream drift is easy to review.
 - `settings-loader.ts` reads Pi `packages`, explicit `extensions`, and `skills` from project and global settings. Relative extension/skill paths are rebased from their settings directory. Package object entries with `extensions` filters are not expanded into unfiltered package `-e` flags. Worker, reviewer, and merge child agents forward packages/extensions with `-e` and skills with `--skill` while still disabling auto-discovery.
 - `agent-bridge-extension.ts` clears the reviewer child-process timeout when the reviewer exits, preventing reviewed worker sessions from lingering on the 10-minute timer.
 - Croc's `writePiSettings` reconciles stale generated Taskplane package and provider extension paths before adding the current bundled paths, preventing duplicate old/new Croc resources from being forwarded to child agents.
+- `taskplane dashboard` and `dashboard/server.cjs` accept `--host` so Croc can bind the dashboard to a configured interface while standalone Taskplane keeps its default listen behavior unless `--host` is provided.
 - patch ledger and executable mode on `bin/taskplane.mjs`
 
 ## Planned Croc-local changes

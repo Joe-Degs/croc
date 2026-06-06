@@ -48,6 +48,7 @@ async function getFreePort(): Promise<number> {
 
 async function startDashboard(root: string): Promise<{ baseUrl: string; proc: ChildProcess }> {
 	const port = await getFreePort();
+	const baseUrl = `http://127.0.0.1:${port}`;
 	const proc = spawn(
 		process.execPath,
 		[dashboardServerPath, "--root", root, "--host", "127.0.0.1", "--port", String(port), "--no-open"],
@@ -88,7 +89,7 @@ async function startDashboard(root: string): Promise<{ baseUrl: string; proc: Ch
 		};
 		proc.once("exit", onExit);
 		const interval = setInterval(() => {
-			if (stdout.includes(`localhost:${port}`)) {
+			if (stdout.includes(baseUrl)) {
 				clearTimeout(timeout);
 				clearInterval(interval);
 				proc.off("exit", onExit);
@@ -97,7 +98,7 @@ async function startDashboard(root: string): Promise<{ baseUrl: string; proc: Ch
 		}, 25);
 	});
 
-	return { baseUrl: `http://127.0.0.1:${port}`, proc };
+	return { baseUrl, proc };
 }
 
 async function request(baseUrl: string, path: string): Promise<{ status: number; text: string }> {

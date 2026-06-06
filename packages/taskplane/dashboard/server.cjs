@@ -6,7 +6,7 @@
  * browser via Server-Sent Events. Zero external dependencies.
  *
  * Usage:
- *   node dashboard/server.cjs [--port 8099] [--root /path/to/project]
+ *   node dashboard/server.cjs [--host 127.0.0.1] [--port 8099] [--root /path/to/project]
  */
 
 const http = require("http");
@@ -41,9 +41,12 @@ let BATCH_HISTORY_PATH;
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = { port: DEFAULT_PORT, open: true, root: "" };
+  const opts = { host: "", port: DEFAULT_PORT, open: true, root: "" };
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--port" && args[i + 1]) {
+    if (args[i] === "--host" && args[i + 1]) {
+      opts.host = args[i + 1];
+      i++;
+    } else if (args[i] === "--port" && args[i + 1]) {
       opts.port = parseInt(args[i + 1]) || DEFAULT_PORT;
       i++;
     } else if (args[i] === "--root" && args[i + 1]) {
@@ -59,6 +62,7 @@ Usage:
   node dashboard/server.cjs [options]
 
 Options:
+  --host <address>  Host/interface to bind (default: Node.js default)
   --port <number>   Port to listen on (default: ${DEFAULT_PORT})
   --root <path>     Project root directory (default: current directory)
   --no-open         Don't auto-open browser
@@ -1690,7 +1694,7 @@ function openBrowser(url) {
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 /** Try to listen on a port. Resolves with the port on success, rejects on EADDRINUSE. */
-function tryListen(server, port) {
+function tryListen(server, port, host) {
   return new Promise((resolve, reject) => {
     const onError = (err) => {
       server.removeListener("listening", onListening);
@@ -1702,16 +1706,20 @@ function tryListen(server, port) {
     };
     server.once("error", onError);
     server.once("listening", onListening);
-    server.listen(port);
+    if (host) {
+      server.listen(port, host);
+    } else {
+      server.listen(port);
+    }
   });
 }
 
 /** Find an available port starting from `start`, trying up to MAX_PORT_ATTEMPTS. */
-async function findPort(server, start, explicit) {
+async function findPort(server, start, explicit, host) {
   // If the user explicitly passed --port, only try that one
   if (explicit) {
     try {
-      return await tryListen(server, start);
+      return await tryListen(server, start, host);
     } catch (err) {
       if (err.code === "EADDRINUSE") {
         console.error(`\n  Port ${start} is already in use.`);
@@ -1724,7 +1732,7 @@ async function findPort(server, start, explicit) {
   // Auto-scan for an available port
   for (let port = start; port < start + MAX_PORT_ATTEMPTS; port++) {
     try {
-      return await tryListen(server, port);
+      return await tryListen(server, port, host);
     } catch (err) {
       if (err.code === "EADDRINUSE") {
         // Close the server so we can retry on the next port
@@ -1755,9 +1763,10 @@ async function main() {
 
   const server = createServer();
   const explicitPort = process.argv.slice(2).includes("--port");
-  const port = await findPort(server, opts.port, explicitPort);
+  const port = await findPort(server, opts.port, explicitPort, opts.host);
+  const dashboardHost = opts.host || "localhost";
 
-  console.log(`\n  Orchestrator Dashboard → http://localhost:${port}\n`);
+  console.log(`\n  Orchestrator Dashboard → http://${dashboardHost}:${port}\n`);
 
   // Broadcast state to all SSE clients on interval
   const pollTimer = setInterval(broadcastState, POLL_INTERVAL);
@@ -1780,7 +1789,7 @@ async function main() {
 
   // Auto-open browser
   if (opts.open) {
-    setTimeout(() => openBrowser(`http://localhost:${port}`), 500);
+    setTimeout(() => openBrowser(`http://${dashboardHost}:${port}`), 500);
   }
 
   // Graceful shutdown

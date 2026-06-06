@@ -13,6 +13,17 @@ export interface DashboardState {
 	pidFile: string;
 }
 
+export function buildDashboardArgs(config: CrocConfig): string[] {
+	return [
+		getBundledTaskplaneBinPath(),
+		"dashboard",
+		"--host",
+		config.taskplane.dashboard.host,
+		"--port",
+		String(config.taskplane.dashboard.port),
+	];
+}
+
 function getPidFile(cwd: string, config: CrocConfig): string {
 	return resolve(cwd, config.taskplane.dashboard.pidFile);
 }
@@ -58,7 +69,7 @@ export function startDashboard(cwd: string, config: CrocConfig, configPath: stri
 		...process.env,
 		...buildRuntimeEnv(config, configPath),
 	};
-	const child = spawnProcess("node", [taskplaneBin, "dashboard", "--port", String(config.taskplane.dashboard.port)], {
+	const child = spawnProcess("node", buildDashboardArgs(config), {
 		cwd,
 		env,
 		stdio: ["ignore", "ignore", "ignore"],
@@ -82,5 +93,5 @@ export function stopDashboard(cwd: string, config: CrocConfig): DashboardState {
 }
 
 export function getDashboardUrl(config: CrocConfig): string {
-	return `http://localhost:${config.taskplane.dashboard.port}`;
+	return `http://${config.taskplane.dashboard.host}:${config.taskplane.dashboard.port}`;
 }

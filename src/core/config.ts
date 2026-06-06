@@ -88,6 +88,7 @@ export interface CrocTaskplaneConfig {
 	testingCommands: Record<string, string>;
 	dashboard: {
 		enabled: boolean;
+		host: string;
 		port: number;
 		applyGlobalPreference: boolean;
 		pidFile: string;
@@ -289,6 +290,7 @@ export function createDefaultConfig(cwd: string): CrocConfig {
 			testingCommands: {},
 			dashboard: {
 				enabled: true,
+				host: "127.0.0.1",
 				port: 8099,
 				applyGlobalPreference: false,
 				pidFile: ".croc/dashboard.pid",

@@ -146,8 +146,11 @@ taskplane:
   maxLanes: 3
   dashboard:
     enabled: true
+    host: 127.0.0.1
     port: 8099
 ```
+
+`taskplane.dashboard.host` defaults to `127.0.0.1`. Set it to `0.0.0.0` or a specific interface address when the dashboard must be reachable from another machine.
 
 `taskplane.tasksPath` is relative to the runtime root. In workspace mode Croc rewrites it so tasks live inside `workspace.taskPacketRepo`.
 

@@ -31,9 +31,12 @@ Defaults:
 Options:
 
 ```bash
+taskplane dashboard --host 127.0.0.1
 taskplane dashboard --port 3000
 taskplane dashboard --no-open
 ```
+
+Use `--host 0.0.0.0` or a specific interface address when running the dashboard on a server that should accept remote connections.
 
 ---
 
@@ -151,7 +154,7 @@ Check that `.pi/` state files are changing during batch execution.
 Run with another port:
 
 ```bash
-taskplane dashboard --port 3010
+taskplane dashboard --host 127.0.0.1 --port 3010
 ```
 
 ---
