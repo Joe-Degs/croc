@@ -272,8 +272,11 @@ function pathForChild(path: string, key: string): string {
 
 function normalizeProjectedPath(value: string, path: string, options: Required<ProjectionOptions>, omittedPaths: string[]): string {
 	if (options.pathPolicy === "preserve" || !isAbsolute(value)) return value;
-	const rel = relative(options.cwd, value);
-	if (rel && !rel.startsWith("..") && !isAbsolute(rel)) return rel;
+	if (options.pathPolicy === "relativize") {
+		const rel = relative(options.cwd, value);
+		if (rel && !rel.startsWith("..") && !isAbsolute(rel)) return rel;
+		return value;
+	}
 	omittedPaths.push(path);
 	return "[omitted:absolute-path]";
 }
@@ -382,11 +385,6 @@ export function projectRuntimeValue(value: unknown, options: ProjectionOptions =
 		const keys = Object.keys(input).sort();
 		for (const key of keys.slice(0, opts.maxObjectKeys)) {
 			const childPath = pathForChild(path, key);
-			if (/^(fullOutputPath|outputPath|tempPath|cachePath)$/i.test(key)) {
-				truncated = true;
-				omittedPaths.push(childPath);
-				continue;
-			}
 			output[key] = walk(input[key], childPath, depth + 1, key);
 		}
 		if (keys.length > opts.maxObjectKeys) {
@@ -440,7 +438,7 @@ function textHeavyPaths(value: unknown): string[] {
 		}
 		if (!isRecord(input)) return;
 		if (Array.isArray(input)) {
-			input.forEach((item, index) => visit(item, `${path}[${index}]`));
+			for (const [index, item] of input.entries()) visit(item, `${path}[${index}]`);
 			return;
 		}
 		for (const [key, child] of Object.entries(input)) visit(child, pathForChild(path, key), key);

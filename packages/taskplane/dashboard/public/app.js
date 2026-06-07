@@ -182,8 +182,26 @@ const TOOL_CONTENT_COLLAPSE_LINE_LIMIT = 10;
 const BASH_TAIL_COLLAPSE_LINE_LIMIT = 10;
 let outputBlockIdSeq = 0;
 
+function textFromStructuredValue(value) {
+  if (value == null || value === '') return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
+  if (Array.isArray(value)) return value.map(textFromStructuredValue).filter(Boolean).join('');
+  if (typeof value === 'object') {
+    for (const field of ['text', 'outputDelta', 'output', 'summary', 'content']) {
+      const text = textFromStructuredValue(value[field]);
+      if (text) return text;
+    }
+  }
+  return '';
+}
+
 function outputTextFromPayload(payload, options = {}) {
-  return String(payload?.text ?? payload?.outputDelta ?? payload?.output ?? options.text ?? "");
+  return textFromStructuredValue(payload?.text)
+    || textFromStructuredValue(payload?.outputDelta)
+    || textFromStructuredValue(payload?.output)
+    || textFromStructuredValue(payload?.content)
+    || textFromStructuredValue(options.text);
 }
 
 function outputLines(text) {
@@ -334,6 +352,29 @@ function replaceOutputText(outputBlock, text) {
     pre.textContent = '';
     appendAnsiText(pre, text);
   }
+}
+
+function outputTruncationPayload(payload, text) {
+  if (payload?.truncated === true) return { ...payload, text };
+  const projection = payload?.resultProjection || payload?.partialResultProjection;
+  if (projection?.truncated === true) return { truncated: true, originalBytes: projection.originalBytes, text };
+  return null;
+}
+
+function syncOutputTruncationBadge(outputBlock, payload) {
+  if (!outputBlock) return;
+  const text = outputBlock.dataset?.rawText || '';
+  const badge = createTruncationBadge(outputTruncationPayload(payload, text));
+  const existing = outputBlock.querySelector('.worker-feed-truncated');
+  if (!badge) {
+    if (existing && typeof existing.remove === 'function') existing.remove();
+    return;
+  }
+  if (existing) {
+    existing.textContent = badge.textContent;
+    return;
+  }
+  outputBlock.appendChild(badge);
 }
 
 function renderMessageInlineMd(text) {
@@ -2658,16 +2699,24 @@ function applyV2AgentEventsPollResponse(requestId, data, onHasMore, feedGenerati
 
 function showV2FeedResetWarning() {
   const container = ensureWorkerFeedContainer();
+  const existing = container.querySelector('.worker-feed-history-gap-warning');
+  if (existing) return existing;
   const warning = document.createElement('div');
-  warning.className = 'worker-feed-reset-warning';
-  warning.textContent = 'Feed cursor expired, reset to the latest events.';
+  warning.className = 'worker-feed-reset-warning worker-feed-history-gap-warning';
+  warning.textContent = 'Feed history gap: older events are unavailable, keeping visible history and appending latest events.';
   container.appendChild(warning);
+  return warning;
 }
 
 function renderV2AgentEvents(data) {
   const envelope = normalizeAgentEventsResponse(data);
   let events = envelope.events;
-  if (envelope.resetRequired) {
+  let container = $terminalBody.querySelector('.worker-feed');
+  const preserveVisibleHistory = envelope.resetRequired && !v2FirstRender && !!container;
+  if (preserveVisibleHistory) {
+    showV2FeedResetWarning();
+  }
+  if (envelope.resetRequired && !preserveVisibleHistory) {
     v2LastCursor = null;
     v2LastSeq = null;
     v2ToolGroups = new Map();
@@ -2688,8 +2737,6 @@ function renderV2AgentEvents(data) {
     events = events.filter((event) => Number.isSafeInteger(event?.seq) && event.seq > v2LastSeq);
     if (events.length === 0) return;
   }
-
-  let container = $terminalBody.querySelector('.worker-feed');
 
   if (hasSeqCursor && !v2FirstRender && container) {
     renderWorkerFeedBatch(events, container);
@@ -2719,9 +2766,7 @@ function renderV2AgentEvents(data) {
     }
 
     if (cursorIdx === -1) {
-      // Cursor not found (rotation/restart): full re-render
-      container.innerHTML = '';
-      v2ToolGroups.clear();
+      showV2FeedResetWarning();
       renderWorkerFeedBatch(events, container);
     } else if (cursorIdx < events.length - 1) {
       // Append only new events after cursor
@@ -2854,7 +2899,8 @@ function createTranscriptText(kind, text) {
 function payloadText(payload, fields) {
   for (const field of fields) {
     const value = payload?.[field];
-    if (value != null && value !== '') return String(value);
+    const text = textFromStructuredValue(value);
+    if (text) return text;
   }
   return '';
 }
@@ -3012,7 +3058,7 @@ function toolBodyText(payload) {
   const args = projectedObject(payload, 'argsProjection');
   const details = projectedObject(payload, 'detailsProjection');
   const result = projectedObject(payload, 'resultProjection');
-  if (tool.includes('write')) return isPlainText(args.content) ? args.content : payloadText(payload, ['snippet', 'contentPreview', 'text']);
+  if (tool.includes('write')) return textFromStructuredValue(args.content) || payloadText(payload, ['snippet', 'contentPreview', 'text']);
   if (tool.includes('edit')) {
     if (isPlainText(details.diff)) return details.diff;
     if (isPlainText(details.patch)) return details.patch;
@@ -3021,9 +3067,11 @@ function toolBodyText(payload) {
     return payloadText(payload, ['snippet', 'diff', 'contentPreview', 'text', 'summary']);
   }
   if (tool.includes('read')) {
-    if (isPlainText(result.content)) return result.content;
+    const resultContent = textFromStructuredValue(result.content);
+    if (resultContent) return resultContent;
     const detailValue = projectedObject(payload, 'detailsProjection');
-    if (isPlainText(detailValue.content)) return detailValue.content;
+    const detailContent = textFromStructuredValue(detailValue.content);
+    if (detailContent) return detailContent;
     return payloadText(payload, ['text', 'snippet', 'contentPreview']);
   }
   return payloadText(payload, ['snippet', 'diff', 'contentPreview']);
@@ -3130,7 +3178,7 @@ function createTerminalRun(evt, payload) {
   const command = formatTerminalCommand(payload);
   const header = appendTextBlock(body, 'worker-feed-command', `$ ${command}`);
   const timeout = projectedObject(payload, 'argsProjection').timeout ?? payload.timeout;
-  if (timeout != null && timeout !== '') appendTextBlock(body, 'worker-feed-tool-notice', `timeout ${timeout}`);
+  if (timeout != null && timeout !== '') appendTextBlock(body, 'worker-feed-tool-notice', `tool timeout: ${timeout}`);
   const group = { root, header, body, output: null, payload, status: 'pending' };
   captureToolProjections(group, payload);
   setToolGroupStatus(group, payload.isError ? 'error' : 'pending');
@@ -3351,7 +3399,10 @@ function renderToolOutputUpdateFeedEvent(evt, container) {
   const payload = evt.payload || {};
   const partial = projectedObject(payload, 'partialResultProjection');
   const delta = payloadText(payload, ['text', 'outputDelta']);
-  const snapshot = String(partial.output ?? partial.content ?? payload.output ?? '');
+  const snapshot = textFromStructuredValue(partial.output)
+    || textFromStructuredValue(partial.content)
+    || textFromStructuredValue(payload.output)
+    || textFromStructuredValue(payload.content);
   if (!delta && !snapshot && !payload.truncated) return;
   const toolCallId = payload.toolCallId ? String(payload.toolCallId) : '';
   const group = toolCallId ? v2ToolGroups.get(toolCallId) || ensurePendingToolGroup(evt, container) : null;
@@ -3360,8 +3411,7 @@ function renderToolOutputUpdateFeedEvent(evt, container) {
     const output = ensureToolGroupOutput(group, { ...payload, text: '', outputDelta: '', output: '' }, tailOptions);
     if (delta) appendOutputText(output, delta);
     else replaceOutputText(output, snapshot);
-    const badge = createTruncationBadge(payload);
-    if (badge) output.appendChild(badge);
+    syncOutputTruncationBadge(output, payload);
     return;
   }
   container.appendChild(renderUnpairedOutputBlock(evt, 'live output'));
@@ -3373,7 +3423,11 @@ function renderToolResultFeedEvent(evt, container) {
   const group = toolCallId ? v2ToolGroups.get(toolCallId) : null;
   const result = projectedObject(payload, 'resultProjection');
   const details = projectedObject(payload, 'detailsProjection');
-  const output = String(result.output ?? result.content ?? details.output ?? details.content ?? payloadText(payload, ['text', 'outputDelta', 'output', 'summary']));
+  const output = textFromStructuredValue(result.output)
+    || textFromStructuredValue(result.content)
+    || textFromStructuredValue(details.output)
+    || textFromStructuredValue(details.content)
+    || payloadText(payload, ['text', 'outputDelta', 'output', 'content', 'summary']);
   if (group) {
     group.payload = { ...group.payload, ...payload };
     captureToolProjections(group, payload);
@@ -3385,6 +3439,7 @@ function renderToolResultFeedEvent(evt, container) {
       const block = ensureToolGroupOutput(group, { ...payload, output: '' }, tailOptions);
       if (payload.isError === true) block.classList.add('worker-feed-output-error', 'error');
       replaceOutputText(block, output);
+      syncOutputTruncationBadge(block, payload);
     } else {
       appendTextBlock(group.body || group.root, 'worker-feed-status-text', payload.isError ? 'failed' : 'complete');
     }

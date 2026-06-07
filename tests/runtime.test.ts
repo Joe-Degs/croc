@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { selectCrocTmuxPane } from "../src/core/runtime.ts";
+import { createDefaultConfig } from "../src/core/config.ts";
+import { buildPiArgs, resolveOrchTarget, selectCrocTmuxPane } from "../src/core/runtime.ts";
 
 describe("tmux runtime targeting", () => {
 	const workspaceRoot = "/workspace/projects/broadcast-demo/.croc/workspace";
@@ -51,5 +52,49 @@ describe("tmux runtime targeting", () => {
 		);
 
 		assert.equal(pane, undefined);
+	});
+});
+
+describe("orchestrator target resolution", () => {
+	function configWithTasks() {
+		const config = createDefaultConfig("/workspace/projects/broadcast-demo");
+		config.taskplane.tasksPath = "packets/taskplane-tasks";
+		config.work.enabled = true;
+		config.work.tasks = [
+			{
+				id: "TASK-004",
+				title: "Implement Maelstrom Broadcast challenge, part 3B",
+				prompt: "Do the work.",
+			},
+		];
+		return config;
+	}
+
+	it("maps a configured task ID to its generated PROMPT.md path", () => {
+		assert.equal(
+			resolveOrchTarget(configWithTasks(), "TASK-004"),
+			"packets/taskplane-tasks/TASK-004-implement-maelstrom-broadcast-challenge-part-3b/PROMPT.md",
+		);
+	});
+
+	it("passes the resolved task prompt path to /orch", () => {
+		assert.deepEqual(buildPiArgs(configWithTasks(), "TASK-004"), [
+			"--model",
+			"hubtel/grm-2.6-plus",
+			"--thinking",
+			"high",
+			"--name",
+			"croc-broadcast-demo",
+			"/orch packets/taskplane-tasks/TASK-004-implement-maelstrom-broadcast-challenge-part-3b/PROMPT.md",
+		]);
+	});
+
+	it("leaves non-task targets unchanged", () => {
+		assert.equal(resolveOrchTarget(configWithTasks(), "all"), "all");
+		assert.equal(resolveOrchTarget(configWithTasks(), "default"), "default");
+		assert.equal(
+			resolveOrchTarget(configWithTasks(), "packets/taskplane-tasks/TASK-004/PROMPT.md"),
+			"packets/taskplane-tasks/TASK-004/PROMPT.md",
+		);
 	});
 });

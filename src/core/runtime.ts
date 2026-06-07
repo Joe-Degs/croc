@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { CrocConfig } from "./config.ts";
 import { buildShellCommand, commandExists, spawnProcess, spawnProcessSync, waitForChildProcess } from "./process.ts";
+import { getTaskFolderName } from "./work-bundles.ts";
 
 export interface RuntimeOptions {
 	cwd: string;
@@ -29,6 +30,7 @@ export interface TmuxPane {
 }
 
 const ACTIVE_BATCH_PHASES = new Set(["planning", "executing", "merging", "paused", "resuming"]);
+const TASK_ID_TARGET_PATTERN = /^[A-Z]+-\d+$/;
 
 export function buildRuntimeEnv(config: CrocConfig, configPath: string): RuntimeEnv {
 	const env: RuntimeEnv = {
@@ -43,13 +45,26 @@ export function buildRuntimeEnv(config: CrocConfig, configPath: string): Runtime
 	return env;
 }
 
+export function resolveOrchTarget(config: CrocConfig, target?: string): string | undefined {
+	if (!target) return undefined;
+	if (!TASK_ID_TARGET_PATTERN.test(target)) return target;
+
+	const task = config.work.enabled ? config.work.tasks.find((entry) => entry.id === target) : undefined;
+	if (!task) {
+		throw new Error(`No work task ${target} found in Croc config. Use all, an area name, or a task PROMPT.md path.`);
+	}
+
+	return join(config.taskplane.tasksPath, getTaskFolderName(task), "PROMPT.md").replace(/\\/g, "/");
+}
+
 export function buildPiArgs(config: CrocConfig, target?: string): string[] {
 	const args: string[] = [];
 	if (config.pi.model) args.push("--model", config.pi.model);
 	if (config.pi.thinking) args.push("--thinking", config.pi.thinking);
 	if (config.pi.name) args.push("--name", config.pi.name);
 	args.push(...config.pi.extraArgs);
-	if (target) args.push(`/orch ${target}`);
+	const orchTarget = resolveOrchTarget(config, target);
+	if (orchTarget) args.push(`/orch ${orchTarget}`);
 	return args;
 }
 

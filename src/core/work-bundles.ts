@@ -156,7 +156,7 @@ function slugify(value: string): string {
 	);
 }
 
-function getTaskFolderName(task: CrocWorkTaskConfig): string {
+export function getTaskFolderName(task: CrocWorkTaskConfig): string {
 	const title = typeof task.title === "string" && task.title.length > 0 ? task.title : task.id;
 	const base = task.folder ? slugify(task.folder) : `${task.id}-${slugify(title)}`;
 	return base.toUpperCase().startsWith(`${task.id}-`) || base.toUpperCase() === task.id ? base : `${task.id}-${base}`;

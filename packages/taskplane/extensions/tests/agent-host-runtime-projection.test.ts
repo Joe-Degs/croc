@@ -196,12 +196,15 @@ describe("Runtime projection helpers", () => {
 		expect(projectToolPartialResult("bash", { details: { output: "stream" } })).toBeDefined();
 	});
 
-	it("omits unsafe absolute paths and full output path metadata", () => {
+	it("preserves absolute paths and output path metadata", () => {
 		const projection = projectRuntimeValue({ path: "/Users/someone/.env", fullOutputPath: "/tmp/tool-output" });
-		expect((projection.value as any).path).toBe("[omitted:absolute-path]");
-		expect((projection.value as any).fullOutputPath).toBeUndefined();
-		expect(projection.omittedPaths).toContain("$.path");
-		expect(projection.omittedPaths).toContain("$.fullOutputPath");
+		expect((projection.value as any).path).toBe("/Users/someone/.env");
+		expect((projection.value as any).fullOutputPath).toBe("/tmp/tool-output");
+		expect(projection.omittedPaths).toEqual([]);
+
+		const omitted = projectRuntimeValue({ path: "/Users/someone/.env" }, { pathPolicy: "omit-absolute" });
+		expect((omitted.value as any).path).toBe("[omitted:absolute-path]");
+		expect(omitted.omittedPaths).toContain("$.path");
 	});
 
 	it("sanitizes existing Runtime V2 payload fields", () => {

@@ -810,7 +810,7 @@ describe("dashboard safe output renderer", () => {
 		const output = group?.querySelector(".worker-feed-output");
 		const button = group?.querySelector("button");
 		expect(group?.querySelector(".worker-feed-command")?.textContent).toBe("$ npm test -- --runInBand");
-		expect(group?.textContent).toContain("timeout 120000");
+		expect(group?.textContent).toContain("tool timeout: 120000");
 		expect(output?.textContent).toContain("line 3");
 		expect(output?.textContent).toContain("line 12");
 		expect(output?.textContent).not.toContain("line 1\nline 2");
@@ -829,6 +829,59 @@ describe("dashboard safe output renderer", () => {
 		expect(failedGroup?.classList.contains("worker-feed-tool-error")).toBe(true);
 		expect(failedGroup?.querySelector(".worker-feed-output-error")?.textContent).toContain("fatal <error>");
 		expect(failedGroup?.querySelector("error")).toBe(null);
+	});
+
+	it("renders structured terminal content without object coercion", () => {
+		const helpers = loadWorkerFeedRuntime();
+
+		helpers.renderV2AgentEvents([
+			{
+				type: "tool_execution_start",
+				payload: {
+					toolCallId: "bash-structured",
+					tool: "bash",
+					argsProjection: { version: 1, value: { command: "tail -80 run.log" } },
+				},
+			},
+			{
+				type: "tool_execution_update",
+				payload: {
+					toolCallId: "bash-structured",
+					tool: "bash",
+					partialResultProjection: { version: 1, value: { content: [{ text: "first chunk\n", type: "text" }] } },
+					truncated: true,
+					originalBytes: 4096,
+				},
+			},
+			{
+				type: "tool_execution_update",
+				payload: {
+					toolCallId: "bash-structured",
+					tool: "bash",
+					partialResultProjection: { version: 1, value: { content: [{ text: "first chunk\nsecond chunk\n", type: "text" }] } },
+					truncated: true,
+					originalBytes: 4096,
+				},
+			},
+			{
+				type: "tool_execution_end",
+				payload: {
+					toolCallId: "bash-structured",
+					tool: "bash",
+					resultProjection: {
+						version: 1,
+						value: { content: [{ text: "final chunk\n", type: "text" }] },
+						truncated: true,
+						originalBytes: 4096,
+					},
+				},
+			},
+		]);
+
+		const group = helpers.terminalBody.querySelector(".worker-feed-terminal-run");
+		expect(group?.textContent).toContain("final chunk");
+		expect(group?.textContent).not.toContain("[object Object]");
+		expect(group?.querySelectorAll(".worker-feed-truncated").length).toBe(1);
 	});
 
 	it("renders direct ls file tools as dollar-prefixed command runs", () => {
@@ -1164,7 +1217,7 @@ describe("dashboard safe output renderer", () => {
 	it("caps compact worker feed items while preserving active pending groups", () => {
 		const helpers = loadWorkerFeedRuntime();
 		const maxItems = helpers.getMaxWorkerFeedItems();
-		const events = Array.from({ length: maxItems + 5 }, (_, index) => ({
+		const events: Array<Record<string, unknown>> = Array.from({ length: maxItems + 5 }, (_, index) => ({
 			type: "prompt_sent",
 			payload: { text: `old prompt ${index}` },
 		}));
@@ -1597,7 +1650,7 @@ describe("dashboard safe output renderer", () => {
 		expect(helpers.getV2State().v2LastSeq).toBe(1);
 	});
 
-	it("shows a compact reset warning for reset envelopes", () => {
+	it("shows a compact history gap warning for reset envelopes", () => {
 		const helpers = loadWorkerFeedRuntime();
 
 		helpers.renderV2AgentEvents({
@@ -1611,8 +1664,50 @@ describe("dashboard safe output renderer", () => {
 			resetRequired: true,
 		});
 
-		expect(helpers.terminalBody.textContent).toContain("Feed cursor expired, reset to the latest events.");
+		expect(helpers.terminalBody.textContent).toContain("Feed history gap: older events are unavailable, keeping visible history and appending latest events.");
 		expect(helpers.terminalBody.textContent).toContain("tail");
+		expect(helpers.getV2State().v2LastSeq).toBe(10);
+	});
+
+	it("preserves visible worker feed history when a cursor envelope falls behind", () => {
+		const helpers = loadWorkerFeedRuntime();
+
+		helpers.renderV2AgentEvents({
+			events: [
+				{ seq: 1, type: "prompt_sent", ts: "2026-06-06T00:00:00.000Z", payload: { text: "already visible" } },
+			],
+			minSeq: 1,
+			maxSeq: 1,
+			hasMore: false,
+			cursorSatisfied: true,
+			resetRequired: false,
+		});
+		helpers.renderV2AgentEvents({
+			events: [
+				{ seq: 10, type: "prompt_sent", ts: "2026-06-06T00:00:10.000Z", payload: { text: "tail after gap" } },
+			],
+			minSeq: 10,
+			maxSeq: 10,
+			hasMore: false,
+			cursorSatisfied: false,
+			resetRequired: true,
+		});
+		helpers.renderV2AgentEvents({
+			events: [
+				{ seq: 10, type: "prompt_sent", ts: "2026-06-06T00:00:10.000Z", payload: { text: "duplicate tail" } },
+			],
+			minSeq: 10,
+			maxSeq: 10,
+			hasMore: false,
+			cursorSatisfied: false,
+			resetRequired: true,
+		});
+
+		expect(helpers.terminalBody.textContent).toContain("already visible");
+		expect(helpers.terminalBody.textContent).toContain("Feed history gap: older events are unavailable, keeping visible history and appending latest events.");
+		expect(helpers.terminalBody.textContent).toContain("tail after gap");
+		expect(helpers.terminalBody.textContent).not.toContain("duplicate tail");
+		expect(helpers.terminalBody.querySelectorAll(".worker-feed-history-gap-warning").length).toBe(1);
 		expect(helpers.getV2State().v2LastSeq).toBe(10);
 	});
 
