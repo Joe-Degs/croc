@@ -1283,6 +1283,65 @@ describe("dashboard safe output renderer", () => {
 		expect(group?.textContent).not.toContain("old args");
 	});
 
+	it("recovers paths and previews from malformed edit args", () => {
+		const helpers = loadWorkerFeedRuntime();
+		helpers.renderV2AgentEvents([
+			{
+				type: "tool_call",
+				payload: {
+					toolCallId: "edit-json",
+					tool: "edit",
+					displayMode: "edit",
+					path: "",
+					argsProjection: {
+						version: 1,
+						value: {
+							edits:
+								'\n[{"oldText":"old <b>text</b>","newText":"new <script>x</script>","path":"docs/broadcast-notes.md"}]',
+						},
+					},
+				},
+			},
+			{
+				type: "tool_call",
+				payload: {
+					toolCallId: "edit-array",
+					tool: "edit",
+					displayMode: "edit",
+					path: "",
+					argsProjection: {
+						version: 1,
+						value: {
+							edits: [
+								{
+									oldText: "unchecked",
+									newText: "checked",
+									path: "/tmp/task/STATUS.md",
+								},
+							],
+						},
+					},
+				},
+			},
+		]);
+
+		const groups = helpers.terminalBody.querySelectorAll(".worker-feed-edit-tool");
+		expect(groups[0]?.querySelector(".worker-feed-file-operation")?.textContent).toBe(
+			"edit docs/broadcast-notes.md",
+		);
+		expect(groups[0]?.textContent).toContain("old:\nold <b>text</b>");
+		expect(groups[0]?.textContent).toContain("new:\nnew <script>x</script>");
+		expect(groups[0]?.textContent).not.toContain('[{"oldText"');
+		expect(groups[0]?.querySelector("script")).toBe(null);
+		expect(groups[0]?.innerHTML).toContain("&lt;script&gt;x&lt;/script&gt;");
+		expect(groups[1]?.querySelector(".worker-feed-file-operation")?.textContent).toBe(
+			"edit /tmp/task/STATUS.md",
+		);
+		expect(groups[1]?.textContent).toContain("old:\nunchecked");
+		expect(groups[1]?.textContent).toContain("new:\nchecked");
+		expect(helpers.terminalBody.textContent).not.toContain("(unknown path)");
+	});
+
 	it("folds assistant and thinking updates into stable stream blocks", () => {
 		const helpers = loadWorkerFeedRuntime();
 		helpers.renderV2AgentEvents([

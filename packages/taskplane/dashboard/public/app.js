@@ -2939,6 +2939,46 @@ function safePathLabel(path) {
   return isPlainText(path) && path.trim() ? path : '(unknown path)';
 }
 
+function parseJsonText(value) {
+  if (!isPlainText(value)) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || !['{', '['].includes(trimmed[0])) return undefined;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+}
+
+function editEntriesFromArgs(args) {
+  const edits = args?.edits;
+  const value = isPlainText(edits) ? parseJsonText(edits) : edits;
+  if (Array.isArray(value)) return value.filter((edit) => edit && typeof edit === 'object' && !Array.isArray(edit));
+  if (value && typeof value === 'object') return [value];
+  return [];
+}
+
+function editPathFromArgs(args) {
+  for (const edit of editEntriesFromArgs(args)) {
+    if (isPlainText(edit.path) && edit.path.trim()) return edit.path;
+  }
+  return '';
+}
+
+function formatEditEntry(edit) {
+  const lines = [];
+  if (isPlainText(edit.path) && edit.path.trim()) lines.push(`path: ${edit.path}`);
+  if (isPlainText(edit.oldText)) lines.push(`old:\n${edit.oldText}`);
+  if (isPlainText(edit.newText)) lines.push(`new:\n${edit.newText}`);
+  if (isPlainText(edit.content)) lines.push(`content:\n${edit.content}`);
+  if (isPlainText(edit.summary) && lines.length === 0) lines.push(edit.summary);
+  return lines.join('\n');
+}
+
+function formatEditEntries(args) {
+  return editEntriesFromArgs(args).map(formatEditEntry).filter(Boolean).join('\n\n');
+}
+
 function splitLogicalLines(text) {
   return String(text ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
 }
@@ -3014,7 +3054,7 @@ function fileOperationVerb(payload) {
 
 function fileOperationTargetParts(payload) {
   const args = projectedObject(payload, 'argsProjection');
-  const path = safePathLabel(args.path || payloadText(payload, ['path', 'filePath', 'target']));
+  const path = safePathLabel(args.path || payloadText(payload, ['path', 'filePath', 'target']) || editPathFromArgs(args));
   const range = payloadText(payload, ['range', 'lineRange']);
   const start = args.offset ?? args.startLine ?? payload.startLine ?? payload.lineStart;
   const end = args.endLine ?? payload.endLine ?? payload.lineEnd;
@@ -3062,6 +3102,8 @@ function toolBodyText(payload) {
   if (tool.includes('edit')) {
     if (isPlainText(details.diff)) return details.diff;
     if (isPlainText(details.patch)) return details.patch;
+    const editPreview = formatEditEntries(args);
+    if (editPreview) return editPreview;
     if (isPlainText(args.edits)) return args.edits;
     if (Array.isArray(args.edits)) return args.edits.map((edit) => typeof edit === 'string' ? edit : previewText(edit, ['summary', 'oldText', 'newText'], 120)).filter(Boolean).join('\n');
     return payloadText(payload, ['snippet', 'diff', 'contentPreview', 'text', 'summary']);
