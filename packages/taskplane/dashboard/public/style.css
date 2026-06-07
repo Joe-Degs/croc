@@ -2380,98 +2380,186 @@ body {
 }
 
 /* TP-107: Agents Panel */
-.agents-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.agents-table {
+  width: 100%;
+  border-collapse: collapse;
 }
-.agent-card {
+
+.agents-table th {
+  text-align: left;
   padding: 8px 12px;
-  border-radius: 6px;
-  background: var(--bg-secondary);
-  border-left: 3px solid var(--green);
-}
-.agent-card.agent-terminal {
-  border-left-color: var(--text-faint);
-  opacity: 0.7;
-}
-.agent-header {
-  font-size: 0.85rem;
-  margin-bottom: 4px;
-}
-.agent-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.agent-badge {
   font-size: 0.7rem;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: var(--bg-primary);
-  color: var(--text-secondary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
 }
-.agent-status-running { color: var(--green); }
-.agent-status-spawning { color: var(--yellow); }
-.agent-status-exited { color: var(--text-faint); }   /* displayed as 'shutdown' */
-.agent-status-killed { color: var(--text-faint); }   /* displayed as 'shutdown' */
-.agent-status-crashed { color: var(--red); }
-.agent-status-timed_out { color: var(--red); }
+
+.agents-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.agents-table tr:last-child td { border-bottom: none; }
+.agents-table tr:hover td { background: var(--bg-surface-hover); }
+
+.agent-id-cell,
+.agent-task-cell {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.agent-terminal-row .agent-id-cell,
+.agent-terminal-row .agent-task-cell,
+.agent-terminal-row td {
+  color: var(--text-faint);
+}
+
+.agent-lane-cell,
+.agent-runtime-cell {
+  white-space: nowrap;
+}
+
+.agent-status-shutdown {
+  color: var(--text-faint);
+}
 
 /* TP-107: Messages Panel */
 .messages-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 10px;
+  padding: 10px 12px;
+  min-width: 0;
+  max-width: 100%;
 }
+.message-feed-item,
 .message-row {
   display: flex;
+  flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
-  padding: 6px 8px;
-  font-size: 0.8rem;
-  border-radius: 4px;
-  background: var(--bg-secondary);
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 10px 12px;
+  font-size: 0.86rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+}
+.message-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  width: 100%;
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  line-height: 1.4;
 }
 .msg-time {
   color: var(--text-faint);
-  min-width: 60px;
+  white-space: nowrap;
 }
 .msg-direction {
-  color: var(--text-secondary);
-  min-width: 100px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
 }
 .msg-badge {
   font-size: 0.65rem;
-  padding: 1px 5px;
-  border-radius: 3px;
+  padding: 1px 6px;
+  border-radius: 999px;
   text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 .msg-type {
-  background: var(--bg-primary);
-  color: var(--text-secondary);
+  background: var(--badge-pending-bg);
+  color: var(--text-muted);
 }
 .msg-pending {
-  background: var(--yellow);
-  color: var(--bg-primary);
+  background: var(--badge-stalled-bg);
+  color: var(--yellow);
 }
 .msg-delivered {
-  background: var(--green);
-  color: var(--bg-primary);
+  background: var(--badge-succeeded-bg);
+  color: var(--green);
 }
 .msg-reply {
-  background: var(--blue);
-  color: var(--bg-primary);
+  background: var(--badge-running-bg);
+  color: var(--accent);
 }
+.message-body,
 .msg-preview {
-  color: var(--text-primary);
-  white-space: pre-wrap;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--text);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
   word-break: break-word;
-  flex: 1;
+  user-select: text;
 }
 .msg-rate-limited {
-  background: var(--red);
-  color: var(--bg-primary);
+  background: var(--badge-failed-bg);
+  color: var(--red);
+}
+.message-paragraph {
+  margin: 0 0 8px;
+}
+.message-paragraph:last-child,
+.message-list-items:last-child,
+.message-code-block:last-child {
+  margin-bottom: 0;
+}
+.message-empty-body {
+  color: var(--text-faint);
+}
+.message-list-items {
+  margin: 0 0 8px 18px;
+  padding: 0;
+}
+.message-list-items li + li {
+  margin-top: 2px;
+}
+.message-inline-code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  padding: 1px 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+.message-code-block {
+  margin: 0 0 10px;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.message-code-block code {
+  font: inherit;
+  white-space: inherit;
 }
 
 /* TP-107: V2 conversation event styles */

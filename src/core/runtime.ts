@@ -22,6 +22,12 @@ interface BatchStateSummary {
 	phase?: string;
 }
 
+export interface TmuxPane {
+	paneId: string;
+	title: string;
+	currentPath: string;
+}
+
 const ACTIVE_BATCH_PHASES = new Set(["planning", "executing", "merging", "paused", "resuming"]);
 
 export function buildRuntimeEnv(config: CrocConfig, configPath: string): RuntimeEnv {
@@ -55,6 +61,49 @@ function tmuxSessionExists(session: string): boolean {
 	return result.status === 0;
 }
 
+export function parseTmuxPanes(output: string): TmuxPane[] {
+	return output
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0)
+		.map((line) => {
+			const [paneId = "", title = "", currentPath = ""] = line.split("\t");
+			return { paneId, title, currentPath };
+		})
+		.filter((pane) => pane.paneId.length > 0);
+}
+
+export function selectCrocTmuxPane(panes: TmuxPane[], piName: string, cwd: string): TmuxPane | undefined {
+	const piTitlePrefix = `π - ${piName}`;
+	const titleMatches = panes.filter((pane) => pane.title.startsWith(piTitlePrefix));
+	if (titleMatches.length === 1) return titleMatches[0];
+	if (titleMatches.length > 1) {
+		const titleAndCwdMatches = titleMatches.filter((pane) => pane.currentPath === cwd);
+		return titleAndCwdMatches.length === 1 ? titleAndCwdMatches[0] : undefined;
+	}
+
+	const cwdMatches = panes.filter((pane) => pane.currentPath === cwd);
+	return cwdMatches.length === 1 ? cwdMatches[0] : undefined;
+}
+
+function resolveCrocTmuxPane(session: string, piName: string, cwd: string): TmuxPane {
+	const result = spawnProcessSync(
+		"tmux",
+		["list-panes", "-s", "-t", session, "-F", "#{pane_id}\t#{pane_title}\t#{pane_current_path}"],
+		{
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "pipe"],
+		},
+	);
+	if (result.status !== 0) {
+		throw new Error(result.stderr.trim() || `Failed to list tmux panes for session ${session}`);
+	}
+
+	const pane = selectCrocTmuxPane(parseTmuxPanes(result.stdout), piName, cwd);
+	if (!pane) throw new Error(`Could not find Croc Pi pane for tmux session ${session}.`);
+	return pane;
+}
+
 function readBatchState(cwd: string): BatchStateSummary | undefined {
 	const path = join(cwd, ".pi", "batch-state.json");
 	if (!existsSync(path)) return undefined;
@@ -78,16 +127,17 @@ function hasActiveBatch(cwd: string): BatchStateSummary | undefined {
 	return ACTIVE_BATCH_PHASES.has(state.phase) ? state : undefined;
 }
 
-function dispatchTargetToTmux(session: string, target: string): void {
+function dispatchTargetToTmux(session: string, target: string, config: CrocConfig, cwd: string): void {
 	const command = `/orch ${target}`;
-	const result = spawnProcessSync("tmux", ["send-keys", "-t", session, command, "C-m"], {
+	const pane = resolveCrocTmuxPane(session, config.pi.name, cwd);
+	const result = spawnProcessSync("tmux", ["send-keys", "-t", pane.paneId, command, "C-m"], {
 		encoding: "utf-8",
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 	if (result.status !== 0) {
-		throw new Error(result.stderr.trim() || `Failed to dispatch ${command} to tmux session ${session}`);
+		throw new Error(result.stderr.trim() || `Failed to dispatch ${command} to tmux pane ${pane.paneId}`);
 	}
-	console.log(`Dispatched ${command} to tmux session ${session}`);
+	console.log(`Dispatched ${command} to tmux pane ${pane.paneId}`);
 }
 
 export function attachTmux(session: string): void {
@@ -133,7 +183,7 @@ export async function startPi(config: CrocConfig, options: RuntimeOptions): Prom
 			console.log(`tmux session ${session} is already running batch${id} (${activeBatch.phase}).`);
 			console.log(`Not dispatching /orch ${options.target}.`);
 		} else {
-			dispatchTargetToTmux(session, options.target);
+			dispatchTargetToTmux(session, options.target, config, cwd);
 		}
 	}
 

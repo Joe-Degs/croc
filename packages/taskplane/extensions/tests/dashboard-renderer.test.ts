@@ -60,6 +60,7 @@ class FakeElement {
 	classList = new FakeClassList(this);
 	children: Array<FakeElement | FakeText> = [];
 	dataset: Record<string, string> = {};
+	style: Record<string, string> = {};
 	parentNode: FakeElement | null = null;
 	private ownText = "";
 	tagName: string;
@@ -196,9 +197,21 @@ interface RendererHelpers {
 	renderV2AgentEvents: (events: Array<Record<string, unknown>>) => void;
 	resetV2FeedState: () => void;
 	buildAgentEventsEndpoint: (context: Record<string, unknown>) => string;
+	renderMessageBodyMarkdown: (text: unknown) => string;
+	renderMailboxAuditEvent: (event: Record<string, unknown>) => string;
+	renderMailboxDirMessage: (message: Record<string, unknown>) => string;
+	renderMessagesPanel: (mailbox: Record<string, unknown> | null) => void;
 	getV2State: () => { v2LastCursor: string | null; v2FirstRender: boolean; groupCount: number };
 	setV2Cursor: (cursor: string) => void;
 	terminalBody: FakeElement;
+	messagesPanel?: FakeElement;
+	messagesBody?: FakeElement;
+}
+
+interface AgentsPanelRuntime {
+	renderAgentsPanel: (registry: Record<string, unknown> | null) => void;
+	panel: FakeElement;
+	body: FakeElement;
 }
 
 function loadHelpers(): RendererHelpers {
@@ -265,6 +278,65 @@ function loadWorkerFeedRuntime(): RendererHelpers {
 	)(fakeDocument, TextEncoder, terminalBody, (fn: () => void) => fn()) as RendererHelpers;
 }
 
+function loadAgentsPanelRuntime(): AgentsPanelRuntime {
+	const src = readFileSync(APP_JS, "utf8");
+	const helperStart = src.indexOf("function formatDuration");
+	const helperEnd = src.indexOf("const ANSI_FG_CLASSES", helperStart);
+	const agentsStart = src.indexOf("const AGENT_TERMINAL_STATUSES");
+	const agentsEnd = src.indexOf("// ─── Render: Mailbox Messages", agentsStart);
+	if (helperStart < 0 || helperEnd < 0 || agentsStart < 0 || agentsEnd < 0) {
+		throw new Error("agents panel block not found");
+	}
+	const panel = new FakeElement("section");
+	const body = new FakeElement("div");
+	const document = {
+		getElementById(id: string): FakeElement | null {
+			return { "agents-panel": panel, "agents-body": body }[id] || null;
+		},
+	};
+	return new Function(
+		"document",
+		[
+			src.slice(helperStart, helperEnd),
+			src.slice(agentsStart, agentsEnd),
+			"return { renderAgentsPanel, panel: document.getElementById('agents-panel'), body: document.getElementById('agents-body') };",
+		].join("\n"),
+	)(document) as AgentsPanelRuntime;
+}
+
+function loadMessagesRuntime(): RendererHelpers {
+	const src = readFileSync(APP_JS, "utf8");
+	const helperStart = src.indexOf("function escapeHtml");
+	const helperEnd = src.indexOf("/** Format token count", helperStart);
+	const messagesStart = src.indexOf("function renderMessagesPanel");
+	const messagesEnd = src.indexOf("// ─── Render: Errors", messagesStart);
+	if (helperStart < 0 || helperEnd < 0 || messagesStart < 0 || messagesEnd < 0) {
+		throw new Error("messages renderer block not found");
+	}
+	const messagesPanel = new FakeElement("section");
+	const messagesBody = new FakeElement("div");
+	const documentWithMessages = {
+		...fakeDocument,
+		getElementById(id: string): FakeElement | null {
+			if (id === "messages-panel") return messagesPanel;
+			if (id === "messages-body") return messagesBody;
+			return null;
+		},
+	};
+
+	return new Function(
+		"document",
+		"TextEncoder",
+		"messagesPanel",
+		"messagesBody",
+		[
+			src.slice(helperStart, helperEnd),
+			src.slice(messagesStart, messagesEnd),
+			"return { renderMessageBodyMarkdown, renderMailboxAuditEvent, renderMailboxDirMessage, renderMessagesPanel, messagesPanel, messagesBody };",
+		].join("\n"),
+	)(documentWithMessages, TextEncoder, messagesPanel, messagesBody) as RendererHelpers;
+}
+
 describe("dashboard safe output renderer", () => {
 	it("converts red ANSI text into a scoped span", () => {
 		const helpers = loadHelpers();
@@ -317,6 +389,99 @@ describe("dashboard safe output renderer", () => {
 
 		expect(badge?.textContent).toBe("4 B captured of 4 KB");
 		expect(helpers.createTruncationBadge({ truncated: false })).toBe(null);
+	});
+
+	it("renders mailbox audit events as stacked feed items", () => {
+		const helpers = loadMessagesRuntime();
+		const rendered = helpers.renderMailboxAuditEvent({
+			type: "message_sent",
+			ts: "2026-06-06T00:00:00.000Z",
+			to: "lane-2",
+			messageType: "status_request",
+			content: "Please **check** `STATUS.md`",
+		});
+
+		expect(rendered).toContain('<article class="message-feed-item message-event-message_sent">');
+		expect(rendered).toContain('<div class="message-meta">');
+		expect(rendered).toContain('<div class="message-body">');
+		expect(rendered).toContain("→ lane-2");
+		expect(rendered).toContain("<strong>check</strong>");
+		expect(rendered).toContain('<code class="message-inline-code">STATUS.md</code>');
+	});
+
+	it("prefers mailbox audit events over directory fallback messages", () => {
+		const helpers = loadMessagesRuntime();
+		helpers.renderMessagesPanel({
+			auditEvents: [
+				{ type: "message_sent", ts: "2026-06-06T00:00:00.000Z", to: "agent", content: "audit wins" },
+			],
+			messages: [{ to: "agent", content: "directory loses", _status: "pending" }],
+		});
+
+		expect(helpers.messagesPanel?.style.display).toBe("");
+		expect(helpers.messagesBody?.textContent).toContain("audit wins");
+		expect(helpers.messagesBody?.textContent).not.toContain("directory loses");
+	});
+
+	it("renders message markdown safely and escapes raw HTML", () => {
+		const helpers = loadMessagesRuntime();
+		const html = helpers.renderMessageBodyMarkdown(
+			[
+				"Hello **there** with `code`",
+				"",
+				"- one",
+				"- <img src=x onerror=alert(1)>",
+				"",
+				"```js",
+				'<script>alert("x")</script>',
+				"```",
+			].join("\n"),
+		);
+
+		expect(html).toContain("<strong>there</strong>");
+		expect(html).toContain('<code class="message-inline-code">code</code>');
+		expect(html).toContain('<ul class="message-list-items"><li>one</li>');
+		expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+		expect(html).toContain("&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;");
+		expect(html).not.toContain("<script>");
+		expect(html).not.toContain("<img");
+	});
+
+	it("escapes mailbox audit metadata and unknown event JSON bodies", () => {
+		const helpers = loadMessagesRuntime();
+		const html = helpers.renderMailboxAuditEvent({
+			type: "unknown<script>alert(1)</script>",
+			from: 'agent<img src=x onerror=alert("x")>',
+			payload: '<script>alert("payload")</script>',
+		});
+
+		expect(html).toContain("unknown&lt;script&gt;alert(1)&lt;/script&gt;");
+		expect(html).toContain("agent&lt;img src=x onerror=alert(&quot;x&quot;)&gt;");
+		expect(html).toContain("&lt;script&gt;alert(\\&quot;payload\\&quot;)&lt;/script&gt;");
+		expect(html).not.toContain("<script>");
+		expect(html).not.toContain("<img");
+	});
+
+	it("escapes mailbox directory metadata", () => {
+		const helpers = loadMessagesRuntime();
+		const html = helpers.renderMailboxDirMessage({
+			to: 'lane<img src=x onerror=alert("x")>',
+			type: "steer<script>alert(1)</script>",
+			_status: "delivered",
+			content: "safe body",
+		});
+
+		expect(html).toContain("lane&lt;img src=x onerror=alert(&quot;x&quot;)&gt;");
+		expect(html).toContain("steer&lt;script&gt;alert(1)&lt;/script&gt;");
+		expect(html).not.toContain("<script>");
+		expect(html).not.toContain("<img");
+	});
+
+	it("hides the mailbox panel when mailbox data is empty", () => {
+		const helpers = loadMessagesRuntime();
+		helpers.renderMessagesPanel({ auditEvents: [], messages: [] });
+
+		expect(helpers.messagesPanel?.style.display).toBe("none");
 	});
 
 	it("renders legacy tool_result output through the output primitive", () => {
@@ -474,7 +639,7 @@ describe("dashboard safe output renderer", () => {
 	it("renders direct ls file tools as dollar-prefixed command runs", () => {
 		const helpers = loadRenderers();
 		const path =
-			"/Users/hubteluser/hubtel/maelstrom-croc-test/.croc/workspace/repos/app/.worktrees/hubteluser-20260606T225737/lane-2";
+			"/workspace/fixtures/maelstrom/.croc/workspace/repos/app/.worktrees/operator-20260606T225737/lane-2";
 		const rendered = helpers.renderV2Event({
 			type: "tool_call",
 			ts: "2026-06-06T00:00:00.000Z",
@@ -510,7 +675,7 @@ describe("dashboard safe output renderer", () => {
 	it("renders verbose terminal commands without trimming path-heavy content", () => {
 		const helpers = loadRenderers();
 		const command =
-			'rm -rf /Users/hubteluser/hubtel/movie-night-croc-test/.croc/workspace/packets/taskplane-tasks/TASK-007-add-end-to-end-smoke-tests-and-self-repair-broken-app-flows/ && cd /Users/hubteluser/hubtel/movie-night-croc-test/.croc/workspace/packets && git add -A && git commit -m "chore: remove empty TASK-007 folder that was causing discovery crash"';
+			'rm -rf /workspace/fixtures/movie-night/.croc/workspace/packets/taskplane-tasks/TASK-007-add-end-to-end-smoke-tests-and-self-repair-broken-app-flows/ && cd /workspace/fixtures/movie-night/.croc/workspace/packets && git add -A && git commit -m "chore: remove empty TASK-007 folder that was causing discovery crash"';
 		const rendered = helpers.renderV2Event({
 			type: "tool_call",
 			ts: "2026-06-06T00:00:00.000Z",
@@ -535,6 +700,16 @@ describe("dashboard safe output renderer", () => {
 		expect(css).toMatch(/\.worker-feed-output,[\s\S]*?overflow-x: hidden;/);
 		expect(css).toMatch(/\.worker-feed-output pre,[\s\S]*?white-space: pre-wrap;/);
 		expect(css).toMatch(/\.worker-feed-output pre,[\s\S]*?overflow-wrap: anywhere;/);
+	});
+
+	it("contains multiline message bodies and code blocks without page overflow", () => {
+		const css = readFileSync(STYLE_CSS, "utf8");
+
+		expect(css).toMatch(/\.message-feed-item,[\s\S]*?overflow: hidden;/);
+		expect(css).toMatch(/\.message-body,[\s\S]*?overflow-wrap: anywhere;/);
+		expect(css).toMatch(/\.message-code-block[\s\S]*?max-width: 100%;/);
+		expect(css).toMatch(/\.message-code-block[\s\S]*?overflow-x: auto;/);
+		expect(css).toMatch(/\.message-code-block[\s\S]*?white-space: pre-wrap;/);
 	});
 
 	it("renders web_search tools as compact catchall tool lines", () => {
@@ -630,7 +805,7 @@ describe("dashboard safe output renderer", () => {
 	it("groups direct ls file tool results as terminal command output", () => {
 		const helpers = loadWorkerFeedRuntime();
 		const path =
-			"/Users/hubteluser/hubtel/maelstrom-croc-test/.croc/workspace/repos/app/.worktrees/hubteluser-20260606T225737/lane-2";
+			"/workspace/fixtures/maelstrom/.croc/workspace/repos/app/.worktrees/operator-20260606T225737/lane-2";
 
 		helpers.renderV2AgentEvents([
 			{
@@ -791,5 +966,109 @@ describe("dashboard safe output renderer", () => {
 		expect(src).toContain("function historyTaskAgentId");
 		expect(src).toContain("openHistoricalWorkerFeed");
 		expect(src).toContain("history-worker-feed-btn");
+	});
+
+	it("renders agents as an operational table without card markup", () => {
+		const runtime = loadAgentsPanelRuntime();
+		runtime.renderAgentsPanel({
+			agents: {
+				"worker-2": {
+					agentId: "worker-2",
+					role: "worker",
+					laneNumber: 2,
+					taskId: "TASK-002",
+					status: "running",
+					startedAt: Date.now() - 65_000,
+				},
+			},
+		});
+
+		expect(runtime.panel.style.display).toBe("");
+		expect(runtime.body.textContent).toContain('<table class="agents-table">');
+		expect(runtime.body.textContent).toContain(
+			"<th>Agent</th><th>Role</th><th>Lane</th><th>Task</th><th>Status</th><th>Runtime</th>",
+		);
+		expect(runtime.body.textContent).not.toContain("agent-card");
+		expect(runtime.body.textContent).not.toContain("status-dot");
+	});
+
+	it("escapes agent table values", () => {
+		const runtime = loadAgentsPanelRuntime();
+		runtime.renderAgentsPanel({
+			agents: {
+				bad: {
+					agentId: 'agent<script>alert("x")</script>`',
+					role: "worker",
+					laneNumber: 1,
+					taskId: "TASK<&>",
+					status: "running",
+				},
+			},
+		});
+
+		expect(runtime.body.textContent).toContain(
+			"agent&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;&#96;",
+		);
+		expect(runtime.body.textContent).toContain("TASK&lt;&amp;&gt;");
+		expect(runtime.body.textContent).not.toContain('<script>alert("x")</script>');
+	});
+
+	it("maps agent statuses to compact badge labels and muted shutdown state", () => {
+		const runtime = loadAgentsPanelRuntime();
+		runtime.renderAgentsPanel({
+			agents: {
+				running: { agentId: "running", role: "worker", status: "running" },
+				wrapping: { agentId: "wrapping", role: "worker", status: "wrapping_up" },
+				spawning: { agentId: "spawning", role: "worker", status: "spawning" },
+				exited: { agentId: "exited", role: "worker", status: "exited" },
+				killed: { agentId: "killed", role: "worker", status: "killed" },
+				crashed: { agentId: "crashed", role: "worker", status: "crashed" },
+				timed: { agentId: "timed", role: "worker", status: "timed_out" },
+			},
+		});
+
+		expect(runtime.body.textContent).toContain(
+			'<span class="status-badge status-running">running</span>',
+		);
+		expect(runtime.body.textContent).toContain(
+			'<span class="status-badge status-running">wrapping_up</span>',
+		);
+		expect(runtime.body.textContent).toContain(
+			'<span class="status-badge status-stalled">spawning</span>',
+		);
+		expect(runtime.body.textContent).toContain(
+			'<span class="status-badge status-failed">crashed</span>',
+		);
+		expect(runtime.body.textContent).toContain(
+			'<span class="status-badge status-failed">timed out</span>',
+		);
+		expect(runtime.body.textContent).toContain(
+			'<span class="status-badge status-skipped agent-status-shutdown">shutdown</span>',
+		);
+		expect(runtime.body.textContent).toContain('<tr class="agent-terminal-row">');
+	});
+
+	it("sorts live workers by lane before mergers and terminal agents", () => {
+		const runtime = loadAgentsPanelRuntime();
+		runtime.renderAgentsPanel({
+			agents: {
+				"merger-live": { agentId: "merger-live", role: "merger", laneNumber: 1, status: "running" },
+				"worker-2": { agentId: "worker-2", role: "worker", laneNumber: 2, status: "running" },
+				"worker-1": { agentId: "worker-1", role: "worker", laneNumber: 1, status: "running" },
+				"worker-exited": { agentId: "worker-exited", role: "worker", laneNumber: 0, status: "exited" },
+			},
+		});
+		const html = runtime.body.textContent;
+
+		expect(html.indexOf("worker-1")).toBeLessThan(html.indexOf("worker-2"));
+		expect(html.indexOf("worker-2")).toBeLessThan(html.indexOf("merger-live"));
+		expect(html.indexOf("merger-live")).toBeLessThan(html.indexOf("worker-exited"));
+	});
+
+	it("keeps the agents panel hidden for an empty registry", () => {
+		const runtime = loadAgentsPanelRuntime();
+		runtime.renderAgentsPanel({ agents: {} });
+
+		expect(runtime.panel.style.display).toBe("none");
 	});
 });

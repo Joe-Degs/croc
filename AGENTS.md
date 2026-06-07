@@ -8,6 +8,7 @@
 - No inline imports.
 - No `any` unless the external API leaves no better option.
 - Do not hardcode secrets. Reference environment variables instead.
+- Tests must use generic fixture names and paths, not local user, machine, or workspace paths.
 
 ## Commands
 

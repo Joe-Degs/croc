@@ -288,6 +288,75 @@ function replaceOutputText(outputBlock, text) {
   }
 }
 
+function renderMessageInlineMd(text) {
+  const parts = String(text ?? "").split(/(`[^`\n]+`)/g);
+  return parts.map((part) => {
+    if (part.startsWith("`") && part.endsWith("`") && part.length >= 2) {
+      return `<code class="message-inline-code">${escapeHtml(part.slice(1, -1))}</code>`;
+    }
+    return escapeHtml(part).replace(/\*\*([^*\n][\s\S]*?[^*\n])\*\*/g, "<strong>$1</strong>");
+  }).join("");
+}
+
+function renderMessageBodyMarkdown(text) {
+  const source = String(text ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  if (!source.trim()) return '<p class="message-paragraph message-empty-body">—</p>';
+
+  const lines = source.split("\n");
+  const blocks = [];
+  let paragraph = [];
+  let list = [];
+
+  const flushParagraph = () => {
+    if (paragraph.length === 0) return;
+    blocks.push(`<p class="message-paragraph">${renderMessageInlineMd(paragraph.join(" "))}</p>`);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (list.length === 0) return;
+    blocks.push(`<ul class="message-list-items">${list.map((item) => `<li>${renderMessageInlineMd(item)}</li>`).join("")}</ul>`);
+    list = [];
+  };
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    const fence = line.match(/^```\s*([\w-]*)\s*$/);
+    if (fence) {
+      flushParagraph();
+      flushList();
+      const code = [];
+      index++;
+      while (index < lines.length && !/^```\s*$/.test(lines[index])) {
+        code.push(lines[index]);
+        index++;
+      }
+      const lang = fence[1] ? ` data-language="${escapeHtml(fence[1])}"` : "";
+      blocks.push(`<pre class="message-code-block"${lang}><code>${escapeHtml(code.join("\n"))}</code></pre>`);
+      continue;
+    }
+
+    const bullet = line.match(/^\s*[-*]\s+(.+)$/);
+    if (bullet) {
+      flushParagraph();
+      list.push(bullet[1]);
+      continue;
+    }
+
+    if (!line.trim()) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    flushList();
+    paragraph.push(line.trim());
+  }
+
+  flushParagraph();
+  flushList();
+  return blocks.join("");
+}
+
 /** Format token count as human-readable (e.g., 1.2k, 45k, 1.2M). */
 function formatTokens(n) {
   if (!n || n === 0) return "0";
@@ -1556,6 +1625,49 @@ function renderMergeAgents(batch, sessions) {
 
 // ─── Render: Runtime V2 Agents (TP-107) ─────────────────────────────────────
 
+const AGENT_TERMINAL_STATUSES = new Set(['exited', 'crashed', 'timed_out', 'killed']);
+
+function agentDisplayStatus(status) {
+  if (status === 'exited' || status === 'killed') return 'shutdown';
+  if (status === 'timed_out') return 'timed out';
+  return status || 'unknown';
+}
+
+function agentStatusClass(status) {
+  if (status === 'running' || status === 'wrapping_up') return 'status-running';
+  if (status === 'spawning') return 'status-stalled';
+  if (status === 'crashed' || status === 'timed_out') return 'status-failed';
+  if (status === 'exited' || status === 'killed') return 'status-skipped agent-status-shutdown';
+  return 'status-pending';
+}
+
+function agentSortRank(agent) {
+  return AGENT_TERMINAL_STATUSES.has(agent.status) ? 1 : 0;
+}
+
+function agentRoleRank(role) {
+  if (role === 'worker') return 0;
+  if (role === 'merger') return 1;
+  return 2;
+}
+
+function agentLaneRank(laneNumber) {
+  return laneNumber == null ? Number.POSITIVE_INFINITY : Number(laneNumber);
+}
+
+function compareAgents(a, b) {
+  return agentSortRank(a) - agentSortRank(b)
+    || agentRoleRank(a.role) - agentRoleRank(b.role)
+    || agentLaneRank(a.laneNumber) - agentLaneRank(b.laneNumber)
+    || String(a.agentId || '').localeCompare(String(b.agentId || ''));
+}
+
+function formatAgentRuntime(agent) {
+  if (!agent.startedAt || AGENT_TERMINAL_STATUSES.has(agent.status)) return '—';
+  const elapsed = Date.now() - agent.startedAt;
+  return elapsed > 0 ? formatDuration(elapsed) : '—';
+}
+
 function renderAgentsPanel(registry) {
   const $panel = document.getElementById('agents-panel');
   const $body = document.getElementById('agents-body');
@@ -1567,35 +1679,25 @@ function renderAgentsPanel(registry) {
   }
 
   $panel.style.display = '';
-  const agents = Object.values(registry.agents);
-  let html = '<div class="agents-grid">';
+  const agents = Object.values(registry.agents).sort(compareAgents);
+  let html = '<table class="agents-table"><thead><tr>';
+  html += '<th>Agent</th><th>Role</th><th>Lane</th><th>Task</th><th>Status</th><th>Runtime</th>';
+  html += '</tr></thead><tbody>';
 
   for (const agent of agents) {
-    const isCrash = ['crashed', 'timed_out'].includes(agent.status);
-    const isTerminal = ['exited', 'crashed', 'timed_out', 'killed'].includes(agent.status);
-    const statusClass = isTerminal ? (isCrash ? 'agent-terminal agent-crashed' : 'agent-terminal') : 'agent-live';
-    const icon = isCrash ? '\u{1F534}' : (isTerminal ? '\u26AA' : '\u{1F7E2}');
-    // Display label: exited and killed both show as 'shutdown' — the mechanism is an
-    // implementation detail. Only crashed/timed_out warrant a different label.
-    const displayStatus = (agent.status === 'exited' || agent.status === 'killed') ? 'shutdown'
-      : agent.status === 'timed_out' ? 'timed out'
-      : agent.status;
-    const elapsed = agent.startedAt ? Math.round((Date.now() - agent.startedAt) / 1000) : 0;
-    const elapsedStr = elapsed > 0 ? formatDuration(elapsed * 1000) : '';
-
-    html += `<div class="agent-card ${statusClass}">`;
-    html += `<div class="agent-header">${icon} <strong>${escapeHtml(agent.agentId)}</strong></div>`;
-    html += `<div class="agent-meta">`;
-    html += `<span class="agent-badge">${escapeHtml(agent.role)}</span>`;
-    if (agent.laneNumber != null) html += `<span class="agent-badge">lane ${agent.laneNumber}</span>`;
-    if (agent.taskId) html += `<span class="agent-badge">${escapeHtml(agent.taskId)}</span>`;
-    html += `<span class="agent-badge agent-status-${agent.status}">${escapeHtml(displayStatus)}</span>`;
-    if (elapsedStr && !isTerminal) html += `<span class="agent-badge">${elapsedStr}</span>`;
-    html += `</div>`;
-    html += `</div>`;
+    const lane = agent.laneNumber != null ? `lane ${agent.laneNumber}` : '—';
+    const task = agent.taskId || '—';
+    html += AGENT_TERMINAL_STATUSES.has(agent.status) ? '<tr class="agent-terminal-row">' : '<tr>';
+    html += `<td class="agent-id-cell">${escapeHtml(agent.agentId)}</td>`;
+    html += `<td>${escapeHtml(agent.role || '—')}</td>`;
+    html += `<td class="agent-lane-cell">${escapeHtml(lane)}</td>`;
+    html += `<td class="agent-task-cell">${escapeHtml(task)}</td>`;
+    html += `<td><span class="status-badge ${agentStatusClass(agent.status)}">${escapeHtml(agentDisplayStatus(agent.status))}</span></td>`;
+    html += `<td class="agent-runtime-cell">${escapeHtml(formatAgentRuntime(agent))}</td>`;
+    html += '</tr>';
   }
 
-  html += '</div>';
+  html += '</tbody></table>';
   $body.innerHTML = html;
 }
 
@@ -1635,54 +1737,73 @@ function renderMessagesPanel(mailbox) {
   $body.innerHTML = html;
 }
 
+function firstMessageText(source, fields) {
+  for (const field of fields) {
+    const value = source?.[field];
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return "";
+}
+
+function renderMessageMetaPart(className, value) {
+  if (!value) return "";
+  return `<span class="${className}">${escapeHtml(value)}</span>`;
+}
+
+function messageClassSuffix(value) {
+  return String(value || "unknown").toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "unknown";
+}
+
+function renderMessageFeedItem({ time, direction, type, status, body, className }) {
+  const itemClass = className ? `message-feed-item ${className}` : "message-feed-item";
+  const meta = [
+    renderMessageMetaPart("msg-time", time),
+    renderMessageMetaPart("msg-direction", direction),
+    type ? `<span class="msg-badge msg-type">${escapeHtml(type)}</span>` : "",
+    status ? `<span class="msg-badge msg-status msg-${messageClassSuffix(status.className || "status")}">${escapeHtml(status.label || status)}</span>` : "",
+  ].join("");
+
+  return `<article class="${itemClass}">`
+    + `<div class="message-meta">${meta}</div>`
+    + `<div class="message-body">${renderMessageBodyMarkdown(body)}</div>`
+    + `</article>`;
+}
+
 /** Render a single mailbox audit event (events.jsonl row). */
 function renderMailboxAuditEvent(evt) {
   const ts = evt.ts ? new Date(evt.ts).toLocaleTimeString() : '';
   const type = evt.type || '';
 
   let direction = '';
-  let statusBadge = '';
-  let typeBadge = '';
-  let preview = '';
+  let status = null;
+  let messageType = evt.messageType || '';
+  let body = '';
 
   if (type === 'message_sent') {
     const isBroadcast = evt.broadcast;
-    direction = isBroadcast ? '\u2192 all (broadcast)' : `\u2192 ${escapeHtml(evt.to || '')}`;
-    statusBadge = '<span class="msg-badge msg-delivered">sent</span>';
-    typeBadge = `<span class="msg-badge msg-type">${escapeHtml(evt.messageType || '')}</span>`;
-    preview = evt.contentPreview || '';
+    direction = isBroadcast ? '\u2192 all (broadcast)' : `\u2192 ${evt.to || ''}`;
+    status = { label: 'sent', className: 'delivered' };
+    body = firstMessageText(evt, ['content', 'body', 'message', 'contentPreview']);
   } else if (type === 'message_delivered') {
-    direction = `\u2192 ${escapeHtml(evt.to || '')}`;
-    statusBadge = evt.broadcast
-      ? '<span class="msg-badge msg-delivered">broadcast delivered</span>'
-      : '<span class="msg-badge msg-delivered">delivered</span>';
-    typeBadge = evt.messageType ? `<span class="msg-badge msg-type">${escapeHtml(evt.messageType)}</span>` : '';
-    preview = evt.contentPreview || '';
+    direction = `\u2192 ${evt.to || ''}`;
+    status = { label: evt.broadcast ? 'broadcast delivered' : 'delivered', className: 'delivered' };
+    body = firstMessageText(evt, ['content', 'body', 'message', 'contentPreview']);
   } else if (type === 'message_replied' || type === 'message_escalated') {
-    direction = `\u2190 ${escapeHtml(evt.from || '')}`;
-    statusBadge = type === 'message_escalated'
-      ? '<span class="msg-badge msg-reply">escalation</span>'
-      : '<span class="msg-badge msg-reply">reply</span>';
-    typeBadge = evt.messageType ? `<span class="msg-badge msg-type">${escapeHtml(evt.messageType)}</span>` : '';
-    preview = evt.contentPreview || '';
+    direction = `\u2190 ${evt.from || ''}`;
+    status = { label: type === 'message_escalated' ? 'escalation' : 'reply', className: 'reply' };
+    body = firstMessageText(evt, ['content', 'body', 'message', 'contentPreview']);
   } else if (type === 'message_rate_limited') {
-    direction = `\u2192 ${escapeHtml(evt.to || '')}`;
-    statusBadge = '<span class="msg-badge msg-rate-limited">rate limited</span>';
+    direction = `\u2192 ${evt.to || ''}`;
+    status = { label: 'rate limited', className: 'rate-limited' };
     const waitSec = evt.retryAfterMs ? Math.ceil(evt.retryAfterMs / 1000) : '?';
-    preview = `${evt.reason || 'Rate limited'} (retry in ${waitSec}s)`;
+    body = `${evt.reason || 'Rate limited'} (retry in ${waitSec}s)`;
   } else {
-    // Unknown event type — render generically
-    direction = evt.from ? `${escapeHtml(evt.from)}` : '';
-    preview = JSON.stringify(evt);
+    direction = evt.from ? `${evt.from}` : '';
+    messageType = type;
+    body = firstMessageText(evt, ['content', 'body', 'message', 'contentPreview']) || JSON.stringify(evt);
   }
 
-  return `<div class="message-row">`
-    + `<span class="msg-time">${escapeHtml(ts)}</span>`
-    + `<span class="msg-direction">${direction}</span>`
-    + typeBadge
-    + statusBadge
-    + `<span class="msg-preview">${escapeHtml(preview)}</span>`
-    + `</div>`;
+  return renderMessageFeedItem({ time: ts, direction, type: messageType, status, body, className: `message-event-${messageClassSuffix(type)}` });
 }
 
 /** Render a single directory-scanned message (legacy fallback). */
@@ -1693,28 +1814,26 @@ function renderMailboxDirMessage(msg) {
   if (msg.to === 'supervisor') {
     direction = '\u2190 supervisor';
   } else if (msg._isBroadcast && msg._agentDir && msg._agentDir !== '_broadcast') {
-    direction = `\u2192 ${escapeHtml(msg._agentDir)} (broadcast)`;
+    direction = `\u2192 ${msg._agentDir} (broadcast)`;
   } else {
-    direction = `\u2192 ${escapeHtml(msg.to || msg._agentDir || '')}`;
+    direction = `\u2192 ${msg.to || msg._agentDir || ''}`;
   }
-  let statusBadge;
-  if (msg._status === 'pending') statusBadge = '<span class="msg-badge msg-pending">pending</span>';
-  else if (msg._status === 'delivered') statusBadge = '<span class="msg-badge msg-delivered">delivered</span>';
-  else if (msg._status === 'reply') statusBadge = '<span class="msg-badge msg-reply">reply</span>';
-  else if (msg._status === 'reply-acked') statusBadge = '<span class="msg-badge msg-delivered">reply (acked)</span>';
-  else statusBadge = '';
-  const typeBadge = `<span class="msg-badge msg-type">${escapeHtml(msg.type || '')}</span>`;
-  const preview = msg.content || '';
-  const broadcastTag = msg._isBroadcast ? ' <span class="msg-badge msg-type">broadcast</span>' : '';
+  let status;
+  if (msg._status === 'pending') status = { label: 'pending', className: 'pending' };
+  else if (msg._status === 'delivered') status = { label: 'delivered', className: 'delivered' };
+  else if (msg._status === 'reply') status = { label: 'reply', className: 'reply' };
+  else if (msg._status === 'reply-acked') status = { label: 'reply (acked)', className: 'delivered' };
+  else status = null;
+  const messageType = msg._isBroadcast ? `${msg.type || ''} broadcast`.trim() : msg.type || '';
 
-  return `<div class="message-row">`
-    + `<span class="msg-time">${escapeHtml(ts)}</span>`
-    + `<span class="msg-direction">${direction}</span>`
-    + typeBadge
-    + statusBadge
-    + broadcastTag
-    + `<span class="msg-preview">${escapeHtml(preview)}</span>`
-    + `</div>`;
+  return renderMessageFeedItem({
+    time: ts,
+    direction,
+    type: messageType,
+    status,
+    body: msg.content || '',
+    className: `message-dir-${messageClassSuffix(msg._status)}`,
+  });
 }
 
 
