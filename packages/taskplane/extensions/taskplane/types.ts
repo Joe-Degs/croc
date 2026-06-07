@@ -4156,6 +4156,8 @@ export interface RuntimeTaskProgress {
  * @since TP-102
  */
 export interface RuntimeAgentEvent {
+	/** Monotonic per-agent event sequence, present on newly emitted Runtime V2 events */
+	seq?: number;
 	/** Batch ID */
 	batchId: string;
 	/** Agent that produced this event */
@@ -4176,6 +4178,17 @@ export interface RuntimeAgentEvent {
 	payload: Record<string, unknown>;
 }
 
+export interface RuntimeProjection {
+	version: 1;
+	value: unknown;
+	truncated: boolean;
+	redacted: boolean;
+	originalBytes?: number;
+	visibleBytes: number;
+	omittedPaths: string[];
+	redactedPaths: string[];
+}
+
 /**
  * Normalized event types for the Runtime V2 agent event stream.
  *
@@ -4191,7 +4204,10 @@ export type RuntimeAgentEventType =
 	// Conversation
 	| "prompt_sent"
 	| "assistant_message"
+	| "assistant_message_update"
+	| "assistant_thinking_update"
 	| "tool_call"
+	| "tool_args_update"
 	| "tool_output_update"
 	| "tool_result"
 	// Telemetry
@@ -4201,6 +4217,7 @@ export type RuntimeAgentEventType =
 	| "retry_finished"
 	| "compaction_started"
 	| "compaction_finished"
+	| "runtime_warning"
 	// Steering
 	| "message_delivered"
 	| "reply_sent"

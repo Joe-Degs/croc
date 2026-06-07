@@ -54,6 +54,14 @@ class FakeClassList {
 	}
 }
 
+function dataAttributeKey(name: string): string {
+	return name
+		.slice("data-".length)
+		.split("-")
+		.map((part, index) => (index === 0 ? part : `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`))
+		.join("");
+}
+
 class FakeElement {
 	nodeType = 1;
 	className = "";
@@ -76,6 +84,7 @@ class FakeElement {
 	}
 
 	appendChild<T extends FakeElement | FakeText>(child: T): T {
+		if (child.parentNode) child.parentNode.children = child.parentNode.children.filter((existing) => existing !== child);
 		child.parentNode = this;
 		this.children.push(child);
 		return child;
@@ -88,11 +97,20 @@ class FakeElement {
 	}
 
 	setAttribute(name: string, value: string): void {
-		this.attributes[name] = String(value);
+		const stringValue = String(value);
+		this.attributes[name] = stringValue;
+		if (name === "id") this.id = stringValue;
+		if (name === "class") this.className = stringValue;
+		if (name === "type") this.type = stringValue;
+		if (name.startsWith("data-")) this.dataset[dataAttributeKey(name)] = stringValue;
 	}
 
 	getAttribute(name: string): string | null {
 		return this.attributes[name] ?? null;
+	}
+
+	getAttributes(): Array<[string, string]> {
+		return Object.entries(this.attributes);
 	}
 
 	addEventListener(name: string, listener: () => void): void {
@@ -103,10 +121,16 @@ class FakeElement {
 		for (const listener of this.listeners.click || []) listener();
 	}
 
+	focus(): void {
+		fakeActiveElement = this;
+	}
+
 	insertBefore<T extends FakeElement | FakeText>(
 		child: T,
 		before: FakeElement | FakeText | null,
 	): T {
+		if (child === before) return child;
+		if (child.parentNode) child.parentNode.children = child.parentNode.children.filter((existing) => existing !== child);
 		child.parentNode = this;
 		if (!before) {
 			this.children.push(child);
@@ -136,14 +160,21 @@ class FakeElement {
 
 	get innerHTML(): string {
 		const own = escapeText(this.ownText);
+		const serializedAttrs = (el: FakeElement) => {
+			const attrs = new Map<string, string>();
+			if (el.id) attrs.set("id", el.id);
+			if (el.className) attrs.set("class", el.className);
+			for (const [name, value] of el.getAttributes()) attrs.set(name, value);
+			return Array.from(attrs)
+				.map(([name, value]) => ` ${name}="${escapeText(value)}"`)
+				.join("");
+		};
 		return (
 			own +
 			this.children
 				.map((child) => {
 					if (child instanceof FakeText) return child.innerHTML;
-					const classAttr = child.className ? ` class="${escapeText(child.className)}"` : "";
-					const idAttr = child.id ? ` id="${escapeText(child.id)}"` : "";
-					return `<${child.tagName}${idAttr}${classAttr}>${child.innerHTML}</${child.tagName}>`;
+					return `<${child.tagName}${serializedAttrs(child)}>${child.innerHTML}</${child.tagName}>`;
 				})
 				.join("")
 		);
@@ -174,6 +205,8 @@ class FakeElement {
 	}
 }
 
+let fakeActiveElement: FakeElement | null = null;
+
 const fakeDocument = {
 	createElement(tagName: string): FakeElement {
 		return new FakeElement(tagName.toLowerCase());
@@ -194,14 +227,22 @@ interface RendererHelpers {
 	replaceOutputText: (outputBlock: FakeElement, text: string) => void;
 	renderConvEvent: (event: Record<string, unknown>) => string | FakeElement;
 	renderV2Event: (event: Record<string, unknown>) => string | FakeElement;
-	renderV2AgentEvents: (events: Array<Record<string, unknown>>) => void;
+	renderV2AgentEvents: (events: Array<Record<string, unknown>> | Record<string, unknown>) => void;
+	applyV2AgentEventsPollResponse: (
+		requestId: number,
+		data: Array<Record<string, unknown>> | Record<string, unknown>,
+		onHasMore?: () => void,
+		feedGeneration?: number,
+	) => boolean;
 	resetV2FeedState: () => void;
 	buildAgentEventsEndpoint: (context: Record<string, unknown>) => string;
 	renderMessageBodyMarkdown: (text: unknown) => string;
 	renderMailboxAuditEvent: (event: Record<string, unknown>) => string;
 	renderMailboxDirMessage: (message: Record<string, unknown>) => string;
 	renderMessagesPanel: (mailbox: Record<string, unknown> | null) => void;
-	getV2State: () => { v2LastCursor: string | null; v2FirstRender: boolean; groupCount: number };
+	getV2State: () => { v2LastCursor: string | null; v2LastSeq: number | null; v2FirstRender: boolean; groupCount: number };
+	getV2FeedGeneration: () => number;
+	getMaxWorkerFeedItems: () => number;
 	setV2Cursor: (cursor: string) => void;
 	terminalBody: FakeElement;
 	messagesPanel?: FakeElement;
@@ -253,11 +294,13 @@ function loadRenderers(): RendererHelpers {
 
 function loadWorkerFeedRuntime(): RendererHelpers {
 	const src = readFileSync(APP_JS, "utf8");
+	const formatStart = src.indexOf("function formatDuration");
+	const formatEnd = src.indexOf("function escapeHtml", formatStart);
 	const helperStart = src.indexOf("function escapeHtml");
 	const helperEnd = src.indexOf("/** Format token count", helperStart);
 	const v2Start = src.indexOf("function buildAgentEventsEndpoint");
 	const v2End = src.indexOf("// ── Segment-Scoped STATUS.md Helpers", v2Start);
-	if (helperStart < 0 || helperEnd < 0 || v2Start < 0 || v2End < 0) {
+	if (formatStart < 0 || formatEnd < 0 || helperStart < 0 || helperEnd < 0 || v2Start < 0 || v2End < 0) {
 		throw new Error("worker feed block not found");
 	}
 	const terminalBody = new FakeElement("div");
@@ -269,13 +312,38 @@ function loadWorkerFeedRuntime(): RendererHelpers {
 		[
 			"let autoScrollOn = false;",
 			"let isProgrammaticScroll = false;",
+			src.slice(formatStart, formatEnd),
 			src.slice(helperStart, helperEnd),
 			src.slice(v2Start, v2End),
-			"function getV2State() { return { v2LastCursor, v2FirstRender, groupCount: v2ToolGroups.size }; }",
+			"function getV2State() { return { v2LastCursor, v2LastSeq, v2FirstRender, groupCount: v2ToolGroups.size }; }",
+			"function getV2FeedGeneration() { return v2FeedGeneration; }",
+			"function getMaxWorkerFeedItems() { return MAX_WORKER_FEED_ITEMS; }",
 			"function setV2Cursor(cursor) { v2LastCursor = cursor; }",
-			"return { stripUnsupportedAnsiControls, createOutputBlock, createTruncationBadge, appendOutputText, replaceOutputText, renderConvEvent: null, renderV2Event, renderV2AgentEvents, resetV2FeedState, buildAgentEventsEndpoint, getV2State, setV2Cursor, terminalBody: $terminalBody };",
+			"return { stripUnsupportedAnsiControls, createOutputBlock, createTruncationBadge, appendOutputText, replaceOutputText, renderConvEvent: null, renderV2Event, renderV2AgentEvents, applyV2AgentEventsPollResponse, resetV2FeedState, buildAgentEventsEndpoint, getV2State, getV2FeedGeneration, getMaxWorkerFeedItems, setV2Cursor, terminalBody: $terminalBody };",
 		].join("\n"),
 	)(fakeDocument, TextEncoder, terminalBody, (fn: () => void) => fn()) as RendererHelpers;
+}
+
+function datasetValues(root: FakeElement): string {
+	const values: string[] = [];
+	const visit = (node: FakeElement | FakeText) => {
+		if (node instanceof FakeText) return;
+		values.push(...Object.entries(node.dataset).map(([key, value]) => `${key}=${value}`));
+		for (const child of node.children) visit(child);
+	};
+	visit(root);
+	return values.join("\n");
+}
+
+function attributeValues(root: FakeElement): string {
+	const values: string[] = [];
+	const visit = (node: FakeElement | FakeText) => {
+		if (node instanceof FakeText) return;
+		values.push(...node.getAttributes().map(([key, value]) => `${key}=${value}`));
+		for (const child of node.children) visit(child);
+	};
+	visit(root);
+	return values.join("\n");
 }
 
 function loadAgentsPanelRuntime(): AgentsPanelRuntime {
@@ -447,17 +515,26 @@ describe("dashboard safe output renderer", () => {
 		expect(html).not.toContain("<img");
 	});
 
-	it("escapes mailbox audit metadata and unknown event JSON bodies", () => {
+	it("escapes mailbox audit metadata and renders unknown events without raw payload dumps", () => {
 		const helpers = loadMessagesRuntime();
 		const html = helpers.renderMailboxAuditEvent({
 			type: "unknown<script>alert(1)</script>",
 			from: 'agent<img src=x onerror=alert("x")>',
 			payload: '<script>alert("payload")</script>',
+			metadata: { secret: "do-not-render" },
+			args: { token: "also-hidden" },
+			toolCallId: "call-secret",
 		});
 
 		expect(html).toContain("unknown&lt;script&gt;alert(1)&lt;/script&gt;");
 		expect(html).toContain("agent&lt;img src=x onerror=alert(&quot;x&quot;)&gt;");
-		expect(html).toContain("&lt;script&gt;alert(\\&quot;payload\\&quot;)&lt;/script&gt;");
+		expect(html).toContain("mailbox event recorded");
+		expect(html).not.toContain("do-not-render");
+		expect(html).not.toContain("also-hidden");
+		expect(html).not.toContain("call-secret");
+		expect(html).not.toContain("payload");
+		expect(html).not.toContain("metadata");
+		expect(html).not.toContain("args");
 		expect(html).not.toContain("<script>");
 		expect(html).not.toContain("<img");
 	});
@@ -566,6 +643,45 @@ describe("dashboard safe output renderer", () => {
 		expect(block.querySelector("button")?.textContent).toBe("... (collapse output)");
 	});
 
+	it("keeps collapse controls reachable at the top and bottom of expanded output", () => {
+		const helpers = loadHelpers();
+		const block = helpers.createOutputBlock({ output: "1\n2\n3\n4\n5\n6\n7\n8" });
+		const button = block.querySelector(".worker-feed-output-disclosure");
+		const pre = block.querySelector("pre");
+
+		button?.click();
+
+		const topCollapse = block.querySelector(".worker-feed-output-disclosure");
+		const bottomCollapse = block.querySelector(".worker-feed-output-collapse");
+		expect(block.children[0]).toBe(topCollapse);
+		expect(topCollapse).toBe(button);
+		expect(topCollapse?.textContent).toBe("... (collapse output)");
+		expect(topCollapse?.getAttribute("aria-expanded")).toBe("true");
+		expect(bottomCollapse?.textContent).toBe("... (collapse output)");
+		expect(bottomCollapse?.getAttribute("aria-expanded")).toBe("true");
+		expect(bottomCollapse?.getAttribute("aria-controls")).toBe(pre?.id);
+
+		bottomCollapse?.click();
+
+		expect(topCollapse?.getAttribute("aria-expanded")).toBe("false");
+		expect(block.querySelector(".worker-feed-output-collapse")).toBe(null);
+		expect(block.textContent).not.toContain("7\n8");
+	});
+
+	it("keeps a focused disclosure control focused through output updates", () => {
+		const helpers = loadHelpers();
+		const block = helpers.createOutputBlock({ output: "1\n2\n3\n4\n5\n6\n7" });
+		const button = block.querySelector("button");
+		fakeActiveElement = null;
+
+		button?.focus();
+		helpers.appendOutputText(block, "\n8");
+		expect(fakeActiveElement).toBe(button);
+
+		helpers.replaceOutputText(block, "a\nb\nc\nd\ne\nf\ng\nh");
+		expect(fakeActiveElement).toBe(button);
+	});
+
 	it("groups tool calls and final results by toolCallId", () => {
 		const helpers = loadWorkerFeedRuntime();
 
@@ -606,6 +722,37 @@ describe("dashboard safe output renderer", () => {
 
 		expect(helpers.terminalBody.textContent).not.toContain("id call-1");
 		expect(helpers.terminalBody.textContent).not.toContain("call-1");
+		expect(datasetValues(helpers.terminalBody)).not.toContain("call-1");
+		expect(helpers.terminalBody.innerHTML).not.toContain("data-tool-call-id");
+	});
+
+	it("keeps raw toolCallId out of DOM attributes while grouping internally", () => {
+		const helpers = loadWorkerFeedRuntime();
+
+		helpers.renderV2AgentEvents([
+			{ type: "tool_call", payload: { toolCallId: "raw-secret-call", tool: "bash", command: "printf ok" } },
+			{ type: "tool_output_update", payload: { toolCallId: "raw-secret-call", text: "streamed" } },
+			{ type: "tool_result", payload: { toolCallId: "raw-secret-call", tool: "bash", text: "final" } },
+		]);
+
+		expect(helpers.terminalBody.querySelectorAll(".worker-feed-tool-group").length).toBe(1);
+		expect(helpers.terminalBody.querySelector(".worker-feed-output")?.textContent).toBe("final");
+		expect(helpers.terminalBody.textContent).not.toContain("raw-secret-call");
+		expect(datasetValues(helpers.terminalBody)).not.toContain("raw-secret-call");
+		expect(attributeValues(helpers.terminalBody)).not.toContain("raw-secret-call");
+		expect(helpers.terminalBody.innerHTML).not.toContain("raw-secret-call");
+		expect(helpers.terminalBody.innerHTML).not.toContain("data-tool-call-id");
+	});
+
+	it("fake DOM exposes data attributes set through setAttribute", () => {
+		const root = new FakeElement("div");
+		const child = new FakeElement("button");
+		child.setAttribute("data-tool-call-id", "raw-secret-call");
+		root.appendChild(child);
+
+		expect(datasetValues(root)).toContain("toolCallId=raw-secret-call");
+		expect(attributeValues(root)).toContain("data-tool-call-id=raw-secret-call");
+		expect(root.innerHTML).toContain('data-tool-call-id="raw-secret-call"');
 	});
 
 	it("does not render visible unpaired toolCallId text", () => {
@@ -634,6 +781,54 @@ describe("dashboard safe output renderer", () => {
 
 		expect(rendered.querySelector(".worker-feed-command")?.textContent).toBe("$ grep -R needle src");
 		expect(rendered.textContent).not.toContain("GREP");
+	});
+
+	it("renders bash projections, timeout, tail collapse, expanded output, and final errors", () => {
+		const helpers = loadWorkerFeedRuntime();
+		const longOutput = Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n");
+
+		helpers.renderV2AgentEvents([
+			{
+				type: "tool_execution_start",
+				payload: {
+					toolCallId: "bash-1",
+					tool: "bash",
+					argsProjection: { version: 1, value: { command: "npm test -- --runInBand", timeout: 120000 } },
+				},
+			},
+			{
+				type: "tool_execution_end",
+				payload: {
+					toolCallId: "bash-1",
+					tool: "bash",
+					resultProjection: { version: 1, value: { output: longOutput } },
+				},
+			},
+		]);
+
+		const group = helpers.terminalBody.querySelector(".worker-feed-terminal-run");
+		const output = group?.querySelector(".worker-feed-output");
+		const button = group?.querySelector("button");
+		expect(group?.querySelector(".worker-feed-command")?.textContent).toBe("$ npm test -- --runInBand");
+		expect(group?.textContent).toContain("timeout 120000");
+		expect(output?.textContent).toContain("line 3");
+		expect(output?.textContent).toContain("line 12");
+		expect(output?.textContent).not.toContain("line 1\nline 2");
+		expect(button?.textContent).toBe("... (showing last 10 lines, 2 earlier lines hidden, click to expand)");
+
+		button?.click();
+		expect(button?.getAttribute("aria-expanded")).toBe("true");
+		expect(output?.textContent).toContain("line 1\nline 2");
+
+		const failed = loadWorkerFeedRuntime();
+		failed.renderV2AgentEvents([
+			{ type: "tool_call", payload: { toolCallId: "bash-error", tool: "bash", command: "npm test" } },
+			{ type: "tool_result", payload: { toolCallId: "bash-error", tool: "bash", isError: true, text: "fatal <error>" } },
+		]);
+		const failedGroup = failed.terminalBody.querySelector(".worker-feed-terminal-run");
+		expect(failedGroup?.classList.contains("worker-feed-tool-error")).toBe(true);
+		expect(failedGroup?.querySelector(".worker-feed-output-error")?.textContent).toContain("fatal <error>");
+		expect(failedGroup?.querySelector("error")).toBe(null);
 	});
 
 	it("renders direct ls file tools as dollar-prefixed command runs", () => {
@@ -852,12 +1047,67 @@ describe("dashboard safe output renderer", () => {
 		expect(rendered.querySelector(".worker-feed-file-operation")?.textContent).toBe(
 			"read src/file.ts:10-20",
 		);
+		expect(rendered.querySelector(".worker-feed-file-verb")?.textContent).toBe("read");
+		expect(rendered.querySelector(".worker-feed-file-path")?.textContent).toBe("src/file.ts");
+		expect(rendered.querySelector(".worker-feed-line-range")?.textContent).toBe(":10-20");
 		expect(rendered.classList.contains("worker-feed-file-tool")).toBe(true);
 		expect(rendered.classList.contains("worker-feed-read-tool")).toBe(true);
 		expect(rendered.textContent).not.toContain("call-1");
 	});
 
-	it("does not render lifecycle labels without lifecycle details", () => {
+	it("renders read content from safe projections with compact fallback status", () => {
+		const resultWins = loadWorkerFeedRuntime();
+		resultWins.renderV2AgentEvents([
+			{
+				type: "tool_execution_end",
+				payload: {
+					toolCallId: "read-result",
+					tool: "read",
+					argsProjection: { version: 1, value: { path: "src/file.ts" } },
+					detailsProjection: { version: 1, value: { content: "details content" } },
+					resultProjection: { version: 1, value: { content: "result <b>wins</b>" } },
+					text: "old payload text",
+				},
+			},
+		]);
+		const resultGroup = resultWins.terminalBody.querySelector(".worker-feed-read-tool");
+		expect(resultGroup?.textContent).toContain("result <b>wins</b>");
+		expect(resultGroup?.textContent).not.toContain("details content");
+		expect(resultGroup?.textContent).not.toContain("old payload text");
+		expect(resultGroup?.querySelector("b")).toBe(null);
+		expect(resultGroup?.innerHTML).toContain("result &lt;b&gt;wins&lt;/b&gt;");
+
+		const detailsWins = loadWorkerFeedRuntime();
+		detailsWins.renderV2AgentEvents([
+			{
+				type: "tool_execution_end",
+				payload: {
+					toolCallId: "read-details",
+					tool: "read",
+					argsProjection: { version: 1, value: { path: "src/file.ts" } },
+					detailsProjection: { version: 1, value: { content: "details wins" } },
+					text: "old payload text",
+				},
+			},
+		]);
+		expect(detailsWins.terminalBody.textContent).toContain("details wins");
+		expect(detailsWins.terminalBody.textContent).not.toContain("old payload text");
+
+		const oldText = loadWorkerFeedRuntime();
+		oldText.renderV2AgentEvents([
+			{ type: "tool_execution_end", payload: { toolCallId: "read-old", tool: "read", path: "src/file.ts", text: "legacy text" } },
+		]);
+		expect(oldText.terminalBody.textContent).toContain("legacy text");
+
+		const missing = loadWorkerFeedRuntime();
+		missing.renderV2AgentEvents([
+			{ type: "tool_execution_end", payload: { toolCallId: "read-empty", tool: "read", path: "src/file.ts" } },
+		]);
+		expect(missing.terminalBody.textContent).toContain("completed");
+		expect(missing.terminalBody.textContent).not.toContain("undefined");
+	});
+
+	it("renders lifecycle notes even with minimal payloads", () => {
 		const helpers = loadWorkerFeedRuntime();
 
 		helpers.renderV2AgentEvents([
@@ -874,7 +1124,7 @@ describe("dashboard safe output renderer", () => {
 		]);
 
 		expect(helpers.terminalBody.textContent).toContain("do the work");
-		expect(helpers.terminalBody.textContent).not.toContain("agent started");
+		expect(helpers.terminalBody.textContent).toContain("agent started");
 	});
 
 	it("renders edit tools as compact edit lines with collapsible snippets", () => {
@@ -893,9 +1143,223 @@ describe("dashboard safe output renderer", () => {
 		expect(rendered.querySelector(".worker-feed-file-operation")?.textContent).toBe(
 			"edit src/file.ts",
 		);
-		expect(rendered.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
-		expect(rendered.textContent).toContain("... (2 more lines, click to expand)");
-		expect(rendered.textContent).not.toContain("-7\n-8");
+		expect(rendered.querySelector(".worker-feed-file-verb")?.textContent).toBe("edit");
+		expect(rendered.querySelector(".worker-feed-file-path")?.textContent).toBe("src/file.ts");
+		expect(rendered.querySelector("button")).toBe(null);
+		expect(rendered.textContent).toContain("-7\n-8");
+	});
+
+	it("preserves worker feed live-region attributes", () => {
+		const helpers = loadWorkerFeedRuntime();
+		helpers.renderV2AgentEvents([
+			{ type: "prompt_sent", ts: "2026-06-06T00:00:00.000Z", payload: { text: "work" } },
+		]);
+		const feed = helpers.terminalBody.querySelector(".worker-feed");
+
+		expect(feed?.getAttribute("role")).toBe("log");
+		expect(feed?.getAttribute("aria-live")).toBe("polite");
+		expect(feed?.getAttribute("aria-relevant")).toBe("additions text");
+	});
+
+	it("caps compact worker feed items while preserving active pending groups", () => {
+		const helpers = loadWorkerFeedRuntime();
+		const maxItems = helpers.getMaxWorkerFeedItems();
+		const events = Array.from({ length: maxItems + 5 }, (_, index) => ({
+			type: "prompt_sent",
+			payload: { text: `old prompt ${index}` },
+		}));
+		events.push({
+			type: "tool_call",
+			payload: { toolCallId: "pending-secret", tool: "bash", command: "sleep 10" },
+		});
+
+		helpers.renderV2AgentEvents(events);
+
+		const feed = helpers.terminalBody.querySelector(".worker-feed");
+		expect(feed?.children.length).toBe(maxItems);
+		expect(feed?.querySelector(".worker-feed-compacted-note")?.textContent).toBe("Older feed items were compacted.");
+		expect(feed?.querySelector(".worker-feed-tool-pending")?.textContent).toContain("$ sleep 10");
+		expect(feed?.textContent).not.toContain("old prompt 0");
+		expect(feed?.textContent).not.toContain("pending-secret");
+		expect(datasetValues(feed as FakeElement)).not.toContain("pending-secret");
+	});
+
+	it("renders Runtime V2 write projections safely with state text", () => {
+		const helpers = loadWorkerFeedRuntime();
+		helpers.renderV2AgentEvents([
+			{
+				type: "tool_execution_start",
+				payload: {
+					toolCallId: "write-1",
+					tool: "write",
+					argsProjection: { version: 1, value: { path: "docs/<x>.md", content: "<script>x</script>\nline" } },
+				},
+			},
+			{ type: "tool_execution_end", payload: { toolCallId: "write-1", tool: "write", summary: "wrote" } },
+		]);
+
+		const group = helpers.terminalBody.querySelector(".worker-feed-write-tool");
+		expect(group?.classList.contains("worker-feed-tool-success")).toBe(true);
+		expect(group?.textContent).toContain("completed");
+		expect(group?.textContent).toContain("<script>x</script>");
+		expect(group?.querySelector("script")).toBe(null);
+		expect(group?.innerHTML).toContain("&lt;script&gt;x&lt;/script&gt;");
+		expect(group?.textContent).not.toContain("write-1");
+	});
+
+	it("renders edit projection diffs with escaped classified lines", () => {
+		const helpers = loadWorkerFeedRuntime();
+		helpers.renderV2AgentEvents([
+			{
+				type: "tool_execution_end",
+				payload: {
+					toolCallId: "edit-1",
+					tool: "edit",
+					argsProjection: { version: 1, value: { path: "src/app.ts", edits: "old args" } },
+					detailsProjection: { version: 1, value: { diff: "diff --git a b\n@@ -1 +1 @@\n-<b>old</b>\n+<script>new</script>" } },
+				},
+			},
+		]);
+
+		const group = helpers.terminalBody.querySelector(".worker-feed-edit-tool");
+		expect(group?.querySelector(".worker-feed-diff-meta")?.textContent).toContain("diff --git");
+		expect(group?.querySelector(".worker-feed-diff-hunk")?.textContent).toContain("@@");
+		expect(group?.querySelector(".worker-feed-diff-removed")?.textContent).toContain("<b>old</b>");
+		expect(group?.querySelector(".worker-feed-diff-added")?.textContent).toContain("<script>new</script>");
+		expect(group?.querySelector("script")).toBe(null);
+		expect(group?.textContent).not.toContain("old args");
+	});
+
+	it("folds assistant and thinking updates into stable stream blocks", () => {
+		const helpers = loadWorkerFeedRuntime();
+		helpers.renderV2AgentEvents([
+			{ type: "assistant_message_update", payload: { messageId: "m1", text: "first" } },
+			{ type: "assistant_message_update", payload: { messageId: "m1", text: "second", done: true } },
+			{ type: "assistant_thinking_update", payload: { streamId: "t1", text: "thinking 1" } },
+			{ type: "assistant_thinking_update", payload: { streamId: "t1", text: "thinking 2", done: true } },
+		]);
+
+		expect(helpers.terminalBody.querySelectorAll(".worker-feed-assistant").length).toBe(1);
+		expect(helpers.terminalBody.querySelectorAll(".worker-feed-thinking").length).toBe(1);
+		expect(helpers.terminalBody.textContent).toContain("second");
+		expect(helpers.terminalBody.textContent).not.toContain("first");
+		expect(helpers.terminalBody.textContent).toContain("thinking 2");
+	});
+
+	it("renders snapshot-only assistant updates and closes fallback streams on isFinal", () => {
+		const helpers = loadWorkerFeedRuntime();
+		helpers.renderV2AgentEvents([
+			{ type: "assistant_message_update", payload: { snapshot: "first snapshot", isFinal: true } },
+			{ type: "assistant_message_update", payload: { text: "second stream", isFinal: true } },
+			{ type: "assistant_thinking_update", payload: { text: "thinking first", isFinal: true } },
+			{ type: "assistant_thinking_update", payload: { text: "thinking second", isFinal: true } },
+		]);
+
+		expect(helpers.terminalBody.querySelectorAll(".worker-feed-assistant").length).toBe(2);
+		expect(helpers.terminalBody.querySelectorAll(".worker-feed-thinking").length).toBe(2);
+		expect(helpers.terminalBody.textContent).toContain("first snapshot");
+		expect(helpers.terminalBody.textContent).toContain("second stream");
+		expect(helpers.terminalBody.textContent).toContain("thinking first");
+		expect(helpers.terminalBody.textContent).toContain("thinking second");
+	});
+
+	it("renders workflow notes without raw payload leaks", () => {
+		const helpers = loadWorkerFeedRuntime();
+		helpers.renderV2AgentEvents([
+			{ type: "agent_started", payload: { cwd: "packages/<task>", model: "model<script>" } },
+			{ type: "retry_finished", payload: { attempt: 2, success: false, error: "failed <b>bad</b>" } },
+			{ type: "context_usage", payload: { percent: 72, pct: 12 } },
+			{ type: "reply_sent", payload: { content: "hello <script>x</script>" } },
+			{ type: "unknown_event", seq: 9, payload: { toolCallId: "secret-call", args: { token: "nope" }, summary: "safe <x>" } },
+		]);
+
+		expect(helpers.terminalBody.textContent).toContain("agent started in packages/<task> using model<script>");
+		expect(helpers.terminalBody.textContent).toContain("retry finished");
+		expect(helpers.terminalBody.textContent).toContain("context usage 72%");
+		expect(helpers.terminalBody.textContent).toContain("reply sent: hello <script>x</script>");
+		expect(helpers.terminalBody.textContent).toContain("unknown event · seq 9 · safe <x>");
+		expect(helpers.terminalBody.textContent).not.toContain("secret-call");
+		expect(helpers.terminalBody.textContent).not.toContain("token");
+		expect(helpers.terminalBody.querySelector("script")).toBe(null);
+	});
+
+	it("caps agent start fields and unknown event labels", () => {
+		const helpers = loadWorkerFeedRuntime();
+		const longCwd = `/tmp/${"c".repeat(180)}`;
+		const longModel = `model-${"m".repeat(180)}`;
+		const longType = `custom_${"event_".repeat(40)}`;
+
+		helpers.renderV2AgentEvents([
+			{ type: "agent_started", payload: { cwd: longCwd, model: longModel } },
+			{ type: longType, payload: { summary: "safe summary" } },
+		]);
+
+		const text = helpers.terminalBody.textContent;
+		expect(text).toContain(`${longCwd.slice(0, 120)}…`);
+		expect(text).toContain(`${longModel.slice(0, 120)}…`);
+		expect(text).not.toContain("c".repeat(121));
+		expect(text).not.toContain("m".repeat(121));
+		expect(text).toContain(`${longType.replace(/_/g, " ").slice(0, 120)}…`);
+		expect(text).toContain("safe summary");
+	});
+
+	it("renders representative workflow events with safe labels and capped previews", () => {
+		const helpers = loadWorkerFeedRuntime();
+		const longPreview = "x".repeat(260);
+
+		helpers.renderV2AgentEvents([
+			{ type: "agent_exited", payload: { durationMs: 125000 } },
+			{ type: "agent_crashed", payload: { exitCode: 2, error: "panic <bad>" } },
+			{ type: "agent_killed", payload: { reason: "operator stop" } },
+			{ type: "agent_timeout", payload: { timeoutMs: 61000, reason: "too slow" } },
+			{ type: "retry_started", payload: { attempt: 2, maxAttempts: 3, error: longPreview } },
+			{ type: "compaction_started", payload: {} },
+			{ type: "compaction_finished", payload: { success: true, summary: "saved context" } },
+			{ type: "message_delivered", payload: { broadcast: true, content: "broadcast body" } },
+			{ type: "message_delivered", payload: { to: "lane-1", content: "direct body" } },
+			{ type: "escalation_sent", payload: { content: "needs supervisor" } },
+			{ type: "exit_intercepted", payload: { action: "continue", reason: "unfinished" } },
+			{ type: "context_usage", payload: { percent: "not-a-number" } },
+			{ type: "context_usage", payload: {} },
+			{ type: "reply_sent", payload: {} },
+		]);
+
+		const text = helpers.terminalBody.textContent;
+		expect(text).toContain("agent exited after 2m 05s");
+		expect(text).toContain("agent crashed with exit code 2 : panic <bad>");
+		expect(text).toContain("agent killed: operator stop");
+		expect(text).toContain("agent timed out after 1m 01s : too slow");
+		expect(text).toContain("retry started, attempt 2 of 3");
+		expect(text).toContain(`${"x".repeat(240)}…`);
+		expect(text).not.toContain("x".repeat(241));
+		expect(text).toContain("compaction started");
+		expect(text).toContain("compaction finished: saved context");
+		expect(text).toContain("mailbox broadcast delivered: broadcast body");
+		expect(text).toContain("direct message delivered: direct body");
+		expect(text).toContain("escalation sent: needs supervisor");
+		expect(text).toContain("exit intercepted: continue: unfinished");
+		expect(text.match(/context usage updated/g)?.length).toBe(2);
+		expect(text).toContain("reply sent");
+		expect(helpers.terminalBody.querySelector("bad")).toBe(null);
+	});
+
+	it("defines tool state and wrapping CSS hooks", () => {
+		const css = readFileSync(STYLE_CSS, "utf8");
+		const fileOperationRule = css.match(/\.worker-feed-file-operation \{[\s\S]*?\n\}/)?.[0] || "";
+
+		expect(css).toContain("--feed-tool-pending-bg: #282832;");
+		expect(css).toContain("--feed-tool-success-bg: #283228;");
+		expect(css).toContain("--feed-tool-error-bg: #3c2828;");
+		expect(css).toMatch(/\.worker-feed-file-operation[\s\S]*?background: var\(--feed-terminal-bg\);/);
+		expect(fileOperationRule).not.toContain("border-bottom");
+		expect(css).toMatch(/\.worker-feed-file-operation \.worker-feed-file-path,[\s\S]*?font-size: inherit;/);
+		expect(css).toMatch(/\.worker-feed-file-operation \.worker-feed-file-path \{[\s\S]*?font-weight: 400;/);
+		expect(css).toMatch(/\.worker-feed-tool-pending[\s\S]*?background: var\(--feed-tool-pending-bg\);/);
+		expect(css).toMatch(/\.worker-feed-tool-success[\s\S]*?background: var\(--feed-tool-success-bg\);/);
+		expect(css).toMatch(/\.worker-feed-tool-error[\s\S]*?background: var\(--feed-tool-error-bg\);/);
+		expect(css).toMatch(/\.worker-feed-diff-line[\s\S]*?overflow-wrap: anywhere;/);
+		expect(css).toMatch(/\.worker-feed-output-disclosure:focus-visible/);
+		expect(css).toMatch(/\.worker-feed-output-collapse:focus-visible/);
 	});
 
 	it("appends tool_output_update to the matching output block", () => {
@@ -932,6 +1396,35 @@ describe("dashboard safe output renderer", () => {
 		expect(helpers.terminalBody.querySelectorAll(".worker-feed-tool-result").length).toBe(0);
 	});
 
+	it("prefers explicit output deltas over cumulative partial projections", () => {
+		const helpers = loadWorkerFeedRuntime();
+
+		helpers.renderV2AgentEvents([
+			{ type: "tool_call", payload: { toolCallId: "call-1", tool: "bash", command: "printf" } },
+			{
+				type: "tool_output_update",
+				payload: {
+					toolCallId: "call-1",
+					tool: "bash",
+					text: "one\n",
+					partialResultProjection: { version: 1, value: { output: "one\n" } },
+				},
+			},
+			{
+				type: "tool_output_update",
+				payload: {
+					toolCallId: "call-1",
+					tool: "bash",
+					text: "two\n",
+					partialResultProjection: { version: 1, value: { output: "one\ntwo\n" } },
+				},
+			},
+		]);
+
+		const output = helpers.terminalBody.querySelector(".worker-feed-output");
+		expect(output?.textContent).toBe("one\ntwo\n");
+	});
+
 	it("resets cursor and grouping state for worker and history switches", () => {
 		const helpers = loadWorkerFeedRuntime();
 		helpers.renderV2AgentEvents([
@@ -946,7 +1439,181 @@ describe("dashboard safe output renderer", () => {
 		expect(helpers.getV2State().groupCount).toBe(1);
 		helpers.resetV2FeedState();
 
-		expect(helpers.getV2State()).toEqual({ v2LastCursor: null, v2FirstRender: true, groupCount: 0 });
+		expect(helpers.getV2State()).toEqual({ v2LastCursor: null, v2LastSeq: null, v2FirstRender: true, groupCount: 0 });
+	});
+
+	it("advances worker feed endpoints with afterSeq after sequenced events", () => {
+		const helpers = loadWorkerFeedRuntime();
+
+		helpers.renderV2AgentEvents([
+			{ seq: 1, type: "prompt_sent", ts: "2026-06-06T00:00:00.000Z", payload: { text: "first" } },
+		]);
+
+		expect(helpers.getV2State().v2LastSeq).toBe(1);
+		expect(helpers.buildAgentEventsEndpoint({ agentId: "agent-1" })).toBe(
+			"/api/agent-events/agent-1?afterSeq=1",
+		);
+		expect(helpers.buildAgentEventsEndpoint({ agentId: "agent-1", batchId: "batch-old" })).toBe(
+			"/api/agent-events/agent-1?batchId=batch-old&afterSeq=1",
+		);
+	});
+
+	it("accepts cursor envelopes and ignores already-applied sequenced events", () => {
+		const helpers = loadWorkerFeedRuntime();
+
+		helpers.renderV2AgentEvents({
+			events: [
+				{ seq: 1, type: "prompt_sent", ts: "2026-06-06T00:00:00.000Z", payload: { text: "first" } },
+				{ seq: 2, type: "prompt_sent", ts: "2026-06-06T00:00:01.000Z", payload: { text: "second" } },
+			],
+			minSeq: 1,
+			maxSeq: 2,
+			hasMore: false,
+			cursorSatisfied: true,
+			resetRequired: false,
+		});
+		helpers.renderV2AgentEvents({
+			events: [
+				{ seq: 2, type: "prompt_sent", ts: "2026-06-06T00:00:01.000Z", payload: { text: "second duplicate" } },
+				{ seq: 3, type: "prompt_sent", ts: "2026-06-06T00:00:02.000Z", payload: { text: "third" } },
+			],
+			minSeq: 1,
+			maxSeq: 3,
+			hasMore: false,
+			cursorSatisfied: true,
+			resetRequired: false,
+		});
+
+		expect(helpers.terminalBody.textContent).toContain("first");
+		expect(helpers.terminalBody.textContent).toContain("second");
+		expect(helpers.terminalBody.textContent).toContain("third");
+		expect(helpers.terminalBody.textContent).not.toContain("second duplicate");
+		expect(helpers.getV2State().v2LastSeq).toBe(3);
+	});
+
+	it("ignores stale worker feed poll responses after a newer response applies", () => {
+		const helpers = loadWorkerFeedRuntime();
+
+		const appliedNewer = helpers.applyV2AgentEventsPollResponse(2, {
+			events: [
+				{ seq: 2, type: "prompt_sent", ts: "2026-06-06T00:00:01.000Z", payload: { text: "newer" } },
+			],
+			minSeq: 2,
+			maxSeq: 2,
+			hasMore: false,
+			cursorSatisfied: true,
+			resetRequired: false,
+		});
+		const appliedStale = helpers.applyV2AgentEventsPollResponse(1, {
+			events: [
+				{ seq: 1, type: "prompt_sent", ts: "2026-06-06T00:00:00.000Z", payload: { text: "stale" } },
+			],
+			minSeq: 1,
+			maxSeq: 1,
+			hasMore: false,
+			cursorSatisfied: true,
+			resetRequired: false,
+		});
+
+		expect(appliedNewer).toBe(true);
+		expect(appliedStale).toBe(false);
+		expect(helpers.terminalBody.textContent).toContain("newer");
+		expect(helpers.terminalBody.textContent).not.toContain("stale");
+		expect(helpers.getV2State().v2LastSeq).toBe(2);
+	});
+
+	it("ignores stale worker feed poll responses from a previous feed generation", () => {
+		const helpers = loadWorkerFeedRuntime();
+		const staleGeneration = helpers.getV2FeedGeneration();
+
+		helpers.resetV2FeedState();
+		const appliedStale = helpers.applyV2AgentEventsPollResponse(
+			1,
+			{
+				events: [
+					{ seq: 1, type: "prompt_sent", ts: "2026-06-06T00:00:00.000Z", payload: { text: "stale" } },
+				],
+				minSeq: 1,
+				maxSeq: 1,
+				hasMore: false,
+				cursorSatisfied: true,
+				resetRequired: false,
+			},
+			undefined,
+			staleGeneration,
+		);
+
+		expect(appliedStale).toBe(false);
+		expect(helpers.terminalBody.textContent).not.toContain("stale");
+		expect(helpers.getV2State().v2LastSeq).toBeNull();
+	});
+
+	it("preserves legacy bare-array cursor behavior for unsequenced events after seq cursor exists", () => {
+		const helpers = loadWorkerFeedRuntime();
+
+		helpers.renderV2AgentEvents({
+			events: [
+				{ seq: 1, type: "prompt_sent", ts: "2026-06-06T00:00:00.000Z", payload: { text: "first" } },
+			],
+			minSeq: 1,
+			maxSeq: 1,
+			hasMore: false,
+			cursorSatisfied: true,
+			resetRequired: false,
+		});
+		helpers.renderV2AgentEvents([
+			{ seq: 1, type: "prompt_sent", ts: "2026-06-06T00:00:00.000Z", payload: { text: "first" } },
+			{ type: "prompt_sent", ts: "2026-06-06T00:00:01.000Z", payload: { text: "legacy unsequenced" } },
+		]);
+
+		expect(helpers.terminalBody.textContent).toContain("first");
+		expect(helpers.terminalBody.textContent).toContain("legacy unsequenced");
+		expect(helpers.getV2State().v2LastSeq).toBe(1);
+	});
+
+	it("signals an immediate worker feed follow-up when a cursor envelope has more events", () => {
+		const helpers = loadWorkerFeedRuntime();
+		let followUps = 0;
+
+		const applied = helpers.applyV2AgentEventsPollResponse(
+			1,
+			{
+				events: [
+					{ seq: 1, type: "prompt_sent", ts: "2026-06-06T00:00:00.000Z", payload: { text: "first" } },
+				],
+				minSeq: 1,
+				maxSeq: 1,
+				hasMore: true,
+				cursorSatisfied: true,
+				resetRequired: false,
+			},
+			() => {
+				followUps += 1;
+			},
+		);
+
+		expect(applied).toBe(true);
+		expect(followUps).toBe(1);
+		expect(helpers.getV2State().v2LastSeq).toBe(1);
+	});
+
+	it("shows a compact reset warning for reset envelopes", () => {
+		const helpers = loadWorkerFeedRuntime();
+
+		helpers.renderV2AgentEvents({
+			events: [
+				{ seq: 10, type: "prompt_sent", ts: "2026-06-06T00:00:00.000Z", payload: { text: "tail" } },
+			],
+			minSeq: 10,
+			maxSeq: 10,
+			hasMore: false,
+			cursorSatisfied: false,
+			resetRequired: true,
+		});
+
+		expect(helpers.terminalBody.textContent).toContain("Feed cursor expired, reset to the latest events.");
+		expect(helpers.terminalBody.textContent).toContain("tail");
+		expect(helpers.getV2State().v2LastSeq).toBe(10);
 	});
 
 	it("builds historical worker feed endpoints with batchId", () => {
@@ -966,6 +1633,7 @@ describe("dashboard safe output renderer", () => {
 		expect(src).toContain("function historyTaskAgentId");
 		expect(src).toContain("openHistoricalWorkerFeed");
 		expect(src).toContain("history-worker-feed-btn");
+		expect(src).not.toContain("onclick=");
 	});
 
 	it("renders agents as an operational table without card markup", () => {

@@ -112,6 +112,12 @@ async function requestJson(baseUrl: string, path: string): Promise<Array<Record<
 	return JSON.parse(response.text) as Array<Record<string, unknown>>;
 }
 
+async function requestJsonValue(baseUrl: string, path: string): Promise<Record<string, unknown>> {
+	const response = await request(baseUrl, path);
+	expect(response.status).toBe(200);
+	return JSON.parse(response.text) as Record<string, unknown>;
+}
+
 function makeTempRoot() {
 	const root = mkdtempSync(join(tmpdir(), "tp-agent-events-"));
 	cleanupFns.push(() => rmSync(root, { recursive: true, force: true }));
@@ -162,6 +168,112 @@ describe("dashboard agent events endpoint", () => {
 
 		expect(events).toHaveLength(1);
 		expect(events[0].type).toBe("late");
+	});
+
+	it("returns a cursor envelope with only sequenced events after afterSeq", async () => {
+		const root = makeTempRoot();
+		writeJsonl(join(root, ".pi", "runtime", "batch-old", "agents", "agent-1", "events.jsonl"), [
+			{ type: "old", ts: 1000 },
+			{ seq: 3, type: "third", ts: 3000 },
+			{ seq: 2, type: "second", ts: 2000 },
+			{ seq: 3, type: "third-duplicate", ts: 3001 },
+			{ seq: "4", type: "invalid-string", ts: 4000 },
+			{ seq: 5, type: "fifth", ts: 5000 },
+		]);
+
+		const { baseUrl } = await startDashboard(root);
+		const envelope = await requestJsonValue(baseUrl, "/api/agent-events/agent-1?batchId=batch-old&afterSeq=2");
+
+		expect((envelope.events as Array<Record<string, unknown>>).map((event) => event.type)).toEqual([
+			"third",
+			"third-duplicate",
+			"fifth",
+		]);
+		expect(envelope.minSeq).toBe(2);
+		expect(envelope.maxSeq).toBe(5);
+		expect(envelope.hasMore).toBe(false);
+		expect(envelope.cursorSatisfied).toBe(true);
+		expect(envelope.resetRequired).toBe(false);
+	});
+
+	it("keeps unsequenced events in no-cursor best-effort mode", async () => {
+		const root = makeTempRoot();
+		writeJsonl(join(root, ".pi", "runtime", "batch-old", "agents", "agent-1", "events.jsonl"), [
+			{ type: "old", ts: 1000 },
+			{ seq: 1, type: "new", ts: 2000 },
+		]);
+
+		const { baseUrl } = await startDashboard(root);
+		const events = await requestJson(baseUrl, "/api/agent-events/agent-1?batchId=batch-old");
+
+		expect(events.map((event) => event.type)).toEqual(["old", "new"]);
+	});
+
+	it("rejects malformed afterSeq values", async () => {
+		const root = makeTempRoot();
+		const { baseUrl } = await startDashboard(root);
+		const invalidValues = ["1.5", "NaN", "Infinity", "-1", "9007199254740992", "%20", "%201", "1%20", "123abc"];
+
+		for (const value of invalidValues) {
+			const response = await request(baseUrl, `/api/agent-events/agent-1?batchId=batch-old&afterSeq=${value}`);
+			expect(response.status).toBe(400);
+			expect(response.text).toBe("Invalid afterSeq");
+		}
+	});
+
+	it("signals reset when afterSeq is older than the readable sequenced tail", async () => {
+		const root = makeTempRoot();
+		writeJsonl(join(root, ".pi", "runtime", "batch-old", "agents", "agent-1", "events.jsonl"), [
+			{ seq: 10, type: "tail-start", ts: 1000 },
+			{ seq: 11, type: "tail-end", ts: 2000 },
+		]);
+
+		const { baseUrl } = await startDashboard(root);
+		const envelope = await requestJsonValue(baseUrl, "/api/agent-events/agent-1?batchId=batch-old&afterSeq=0");
+
+		expect(envelope.minSeq).toBe(10);
+		expect(envelope.maxSeq).toBe(11);
+		expect(envelope.cursorSatisfied).toBe(false);
+		expect(envelope.resetRequired).toBe(true);
+		expect((envelope.events as Array<Record<string, unknown>>).map((event) => event.type)).toEqual(["tail-start", "tail-end"]);
+	});
+
+	it("returns a stable empty cursor envelope for unsequenced files", async () => {
+		const root = makeTempRoot();
+		writeJsonl(join(root, ".pi", "runtime", "batch-old", "agents", "agent-1", "events.jsonl"), [
+			{ type: "old", ts: 1000 },
+		]);
+
+		const { baseUrl } = await startDashboard(root);
+		const envelope = await requestJsonValue(baseUrl, "/api/agent-events/agent-1?batchId=batch-old&afterSeq=0");
+
+		expect(envelope).toEqual({
+			events: [],
+			minSeq: null,
+			maxSeq: null,
+			hasMore: false,
+			cursorSatisfied: true,
+			resetRequired: false,
+		});
+	});
+
+	it("reads the highest valid existing sequence for append reuse", async () => {
+		const root = makeTempRoot();
+		const eventsPath = join(root, "events.jsonl");
+		writeFileSync(
+			eventsPath,
+			[
+				JSON.stringify({ type: "old" }),
+				"not json",
+				JSON.stringify({ seq: 2, type: "valid" }),
+				JSON.stringify({ seq: "99", type: "invalid" }),
+				JSON.stringify({ seq: 7, type: "highest" }),
+				JSON.stringify({ seq: 4, type: "lower" }),
+			].join("\n"),
+		);
+		const { readHighestRuntimeEventSeq } = await import("../taskplane/agent-host.ts");
+
+		expect(readHighestRuntimeEventSeq(eventsPath)).toBe(7);
 	});
 
 	it("rejects invalid agent IDs", async () => {

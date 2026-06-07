@@ -194,7 +194,7 @@ describe("3.x: Dashboard renders V2 conversation events (TP-111)", () => {
 		const block = dashboardAppSrc.slice(fnIdx, fnIdx + 4000);
 		expect(block).toContain("'assistant_message'");
 		expect(dashboardAppSrc).toContain("renderAssistantFeedEvent");
-		expect(dashboardAppSrc).toContain("payloadText(payload, ['text', 'message'])");
+		expect(dashboardAppSrc).toContain("payloadText(payload, ['text', 'message', 'snapshot'])");
 	});
 
 	it("3.2: worker feed handles prompt_sent with prompt text", () => {
@@ -355,6 +355,56 @@ describe("5.x: Runtime behavioral emission (TP-111)", () => {
 
 		const resultPayload = toolResult!.payload as Record<string, unknown>;
 		expect(String(resultPayload["summary"] || "").length).toBeLessThanOrEqual(200);
+	});
+
+	it("5.2a: redacts multiline secrets before building tool previews and summaries", async () => {
+		const events: RuntimeAgentEvent[] = [];
+		const privateKey = "-----BEGIN PRIVATE KEY-----\n" + "secretbody".repeat(80) + "\n-----END PRIVATE KEY-----";
+
+		const { promise } = spawnAgent(
+			{
+				agentId: "orch-test-lane-2a-worker",
+				role: "worker",
+				batchId: "batch-tp111",
+				laneNumber: 21,
+				taskId: "TP-111",
+				repoId: "default",
+				cwd: process.cwd(),
+				prompt: "run",
+				mailboxDir: null,
+				stateRoot: null,
+			},
+			(evt) => events.push(evt),
+		);
+
+		expect(lastSpawnedProc).toBeDefined();
+		lastSpawnedProc!.stdout.write(
+			JSON.stringify({
+				type: "tool_execution_start",
+				toolName: "write",
+				toolCallId: "call-secret-1",
+				args: { content: privateKey, path: "keys/id.pem" },
+			}) + "\n",
+		);
+		lastSpawnedProc!.stdout.write(
+			JSON.stringify({
+				type: "tool_execution_end",
+				toolName: "write",
+				toolCallId: "call-secret-1",
+				result: { content: [{ type: "text", text: privateKey }] },
+			}) + "\n",
+		);
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "agent_end" }) + "\n");
+		lastSpawnedProc!.emit("close", 0, null);
+
+		await promise;
+
+		const toolCall = events.find((event) => event.type === "tool_call")!;
+		const toolResult = events.find((event) => event.type === "tool_result")!;
+		const serialized = JSON.stringify([toolCall.payload.argsPreview, toolResult.payload.summary]);
+		expect(serialized).toContain("[REDACTED:private_key]");
+		expect(serialized).not.toContain("-----BEGIN PRIVATE KEY-----");
+		expect(serialized).not.toContain("secretbody");
 	});
 
 	it("5.3: malformed assistant content arrays do not crash and still emit text blocks", async () => {
@@ -650,5 +700,283 @@ describe("5.x: Runtime behavioral emission (TP-111)", () => {
 		const calls = events.filter((e) => e.type === "tool_call");
 		expect(calls[0]!.payload["displayMode"]).toBe("edit");
 		expect(calls[1]!.payload["displayMode"]).toBe("summary");
+	});
+
+	it("5.9: adds Pi-shaped projections to tool start, update, and end events", async () => {
+		const events: RuntimeAgentEvent[] = [];
+		const { promise } = spawnAgent(
+			{
+				agentId: "orch-test-lane-9-worker",
+				role: "worker",
+				batchId: "batch-tp111",
+				laneNumber: 9,
+				taskId: "TP-111",
+				repoId: "default",
+				cwd: process.cwd(),
+				prompt: "run",
+				mailboxDir: null,
+				stateRoot: null,
+			},
+			(evt) => events.push(evt),
+		);
+
+		expect(lastSpawnedProc).toBeDefined();
+		lastSpawnedProc!.stdout.write(
+			JSON.stringify({
+				type: "tool_execution_start",
+				toolName: "write",
+				toolCallId: "call-rich-1",
+				args: { path: "docs/file.md", content: "API_KEY=secret-value" },
+			}) + "\n",
+		);
+		lastSpawnedProc!.stdout.write(
+			JSON.stringify({
+				type: "tool_execution_update",
+				toolName: "bash",
+				toolCallId: "call-rich-2",
+				partialResult: { content: [{ type: "text", text: "one\n" }], details: { output: "one\n" } },
+			}) + "\n",
+		);
+		lastSpawnedProc!.stdout.write(
+			JSON.stringify({
+				type: "tool_execution_end",
+				toolName: "edit",
+				toolCallId: "call-rich-3",
+				result: { content: [{ type: "text", text: "done" }], details: { diff: "-a\n+b", patch: "patch", firstChangedLine: 7 } },
+			}) + "\n",
+		);
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "agent_end" }) + "\n");
+		lastSpawnedProc!.emit("close", 0, null);
+
+		await promise;
+
+		const toolCall = events.find((event) => event.type === "tool_call")!;
+		const update = events.find((event) => event.type === "tool_output_update")!;
+		const result = events.find((event) => event.type === "tool_result")!;
+
+		expect((toolCall.payload.argsProjection as any).value.path).toBe("docs/file.md");
+		expect((toolCall.payload.argsProjection as any).value.content).toContain("[REDACTED:secret]");
+		expect(toolCall.payload.toolCallId).toBe("call-rich-1");
+		expect((update.payload.partialResultProjection as any).value.details.output).toBe("one\n");
+		expect((update.payload.detailsProjection as any).value.output).toBe("one\n");
+		expect((result.payload.resultProjection as any).value.content[0].text).toBe("done");
+		expect((result.payload.detailsProjection as any).value.firstChangedLine).toBe(7);
+		expect(result.payload.summary).toBe("done");
+	});
+
+	it("5.9a: projects edit, bash, and read tool starts behaviorally", async () => {
+		const events: RuntimeAgentEvent[] = [];
+		const { promise } = spawnAgent(
+			{
+				agentId: "orch-test-lane-9a-worker",
+				role: "worker",
+				batchId: "batch-tp111",
+				laneNumber: 91,
+				taskId: "TP-111",
+				repoId: "default",
+				cwd: process.cwd(),
+				prompt: "run",
+				mailboxDir: null,
+				stateRoot: null,
+			},
+			(evt) => events.push(evt),
+		);
+
+		expect(lastSpawnedProc).toBeDefined();
+		for (const event of [
+			{ type: "tool_execution_start", toolName: "edit", toolCallId: "edit-1", args: { path: "src/a.ts", edits: [{ oldText: "a", newText: "b" }] } },
+			{ type: "tool_execution_start", toolName: "bash", toolCallId: "bash-1", args: { command: "npm test", timeout: 30, ignored: "drop" } },
+			{ type: "tool_execution_start", toolName: "read", toolCallId: "read-1", args: { path: "src/b.ts", offset: 3, limit: 9, content: "drop" } },
+		]) {
+			lastSpawnedProc!.stdout.write(JSON.stringify(event) + "\n");
+		}
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "agent_end" }) + "\n");
+		lastSpawnedProc!.emit("close", 0, null);
+
+		await promise;
+
+		const calls = events.filter((event) => event.type === "tool_call");
+		expect((calls[0]!.payload.argsProjection as any).value.edits[0].newText).toBe("b");
+		expect((calls[1]!.payload.argsProjection as any).value.command).toBe("npm test");
+		expect((calls[1]!.payload.argsProjection as any).value.ignored).toBeUndefined();
+		expect((calls[2]!.payload.argsProjection as any).value.limit).toBe(9);
+		expect((calls[2]!.payload.argsProjection as any).value.content).toBeUndefined();
+	});
+
+	it("5.9b: projects paths relative to the spawned agent cwd", async () => {
+		const events: RuntimeAgentEvent[] = [];
+		const agentCwd = mkdtempSync(join(tmpdir(), "tp111-cwd-"));
+		try {
+			const { promise } = spawnAgent(
+				{
+					agentId: "orch-test-lane-9b-worker",
+					role: "worker",
+					batchId: "batch-tp111",
+					laneNumber: 92,
+					taskId: "TP-111",
+					repoId: "default",
+					cwd: agentCwd,
+					prompt: "run",
+					mailboxDir: null,
+					stateRoot: null,
+				},
+				(evt) => events.push(evt),
+			);
+
+			expect(lastSpawnedProc).toBeDefined();
+			lastSpawnedProc!.stdout.write(JSON.stringify({
+				type: "tool_execution_start",
+				toolName: "read",
+				toolCallId: "read-cwd-1",
+				args: { path: join(agentCwd, "src", "index.ts"), offset: 1, limit: 1 },
+			}) + "\n");
+			lastSpawnedProc!.stdout.write(JSON.stringify({ type: "agent_end" }) + "\n");
+			lastSpawnedProc!.emit("close", 0, null);
+
+			await promise;
+
+			const call = events.find((event) => event.type === "tool_call")!;
+			expect(call.payload.path).toBe("src/index.ts");
+			expect((call.payload.argsProjection as any).value.path).toBe("src/index.ts");
+		} finally {
+			rmSync(agentCwd, { recursive: true, force: true });
+		}
+	});
+
+	it("5.10: emits assistant and tool argument stream update events", async () => {
+		const events: RuntimeAgentEvent[] = [];
+		const { promise } = spawnAgent(
+			{
+				agentId: "orch-test-lane-10-worker",
+				role: "worker",
+				batchId: "batch-tp111",
+				laneNumber: 10,
+				taskId: "TP-111",
+				repoId: "default",
+				cwd: process.cwd(),
+				prompt: "run",
+				mailboxDir: null,
+				stateRoot: null,
+			},
+			(evt) => events.push(evt),
+		);
+
+		expect(lastSpawnedProc).toBeDefined();
+		lastSpawnedProc!.stdout.write(
+			JSON.stringify({
+				type: "message_update",
+				message: { id: "msg-1", delta: "hello", thinkingDelta: "thinking", isFinal: false },
+			}) + "\n",
+		);
+		lastSpawnedProc!.stdout.write(
+			JSON.stringify({
+				type: "message_update",
+				toolCallId: "call-args-1",
+				toolName: "bash",
+				args: { command: "npm test", timeout: 30 },
+				isFinal: true,
+			}) + "\n",
+		);
+		lastSpawnedProc!.stdout.write(
+			JSON.stringify({
+				type: "tool_execution_start",
+				toolName: "bash",
+				toolCallId: "call-args-1",
+				args: { command: "npm test", timeout: 30 },
+			}) + "\n",
+		);
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "agent_end" }) + "\n");
+		lastSpawnedProc!.emit("close", 0, null);
+
+		await promise;
+
+		const message = events.find((event) => event.type === "assistant_message_update")!;
+		const thinking = events.find((event) => event.type === "assistant_thinking_update")!;
+		const args = events.find((event) => event.type === "tool_args_update")!;
+		const start = events.find((event) => event.type === "tool_call")!;
+
+		expect(message.payload.messageId).toBe("msg-1");
+		expect(message.payload.delta).toBe("hello");
+		expect(thinking.payload.messageId).toBe("msg-1");
+		expect(thinking.payload.text).toBe("thinking");
+		expect(args.payload.toolCallId).toBe("call-args-1");
+		expect((args.payload.argsProjection as any).value.command).toBe("npm test");
+		expect(start.payload.toolCallId).toBe("call-args-1");
+	});
+
+	it("5.10a: adds fallback stream IDs and preserves unknown tool arg projections", async () => {
+		const events: RuntimeAgentEvent[] = [];
+		const { promise } = spawnAgent(
+			{
+				agentId: "orch-test-lane-10a-worker",
+				role: "worker",
+				batchId: "batch-tp111",
+				laneNumber: 101,
+				taskId: "TP-111",
+				repoId: "default",
+				cwd: process.cwd(),
+				prompt: "run",
+				mailboxDir: null,
+				stateRoot: null,
+			},
+			(evt) => events.push(evt),
+		);
+
+		expect(lastSpawnedProc).toBeDefined();
+		lastSpawnedProc!.stdout.write(JSON.stringify({
+			type: "message_update",
+			delta: "hello",
+			thinkingDelta: "thinking",
+		}) + "\n");
+		lastSpawnedProc!.stdout.write(JSON.stringify({
+			type: "message_update",
+			toolCallId: "unknown-args-1",
+			args: { custom: "value", nested: { token: "abcdefghijklmnopqrstuvwxyz123456" } },
+		}) + "\n");
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "agent_end" }) + "\n");
+		lastSpawnedProc!.emit("close", 0, null);
+
+		await promise;
+
+		const message = events.find((event) => event.type === "assistant_message_update")!;
+		const thinking = events.find((event) => event.type === "assistant_thinking_update")!;
+		const args = events.find((event) => event.type === "tool_args_update")!;
+		expect(String(message.payload.streamId)).toContain("local-assistant-");
+		expect(String(thinking.payload.streamId)).toContain("local-thinking-");
+		expect((args.payload.argsProjection as any).value.custom).toBe("value");
+		expect(JSON.stringify((args.payload.argsProjection as any).value)).not.toContain("abcdefghijklmnopqrstuvwxyz");
+	});
+
+	it("5.11: accepts canonical and compatibility retry/compaction starts", async () => {
+		const events: RuntimeAgentEvent[] = [];
+		const { promise } = spawnAgent(
+			{
+				agentId: "orch-test-lane-11-worker",
+				role: "worker",
+				batchId: "batch-tp111",
+				laneNumber: 11,
+				taskId: "TP-111",
+				repoId: "default",
+				cwd: process.cwd(),
+				prompt: "run",
+				mailboxDir: null,
+				stateRoot: null,
+			},
+			(evt) => events.push(evt),
+		);
+
+		expect(lastSpawnedProc).toBeDefined();
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "compaction_start" }) + "\n");
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "auto_compaction_start" }) + "\n");
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "retry_start", error: "ghp_abcdefghijklmnopqrstuvwxyz123456" }) + "\n");
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "auto_retry_start", errorMessage: "token-abcdefghijklmnopqrstuvwxyz" }) + "\n");
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "agent_end" }) + "\n");
+		lastSpawnedProc!.emit("close", 0, null);
+
+		await promise;
+
+		expect(events.filter((event) => event.type === "compaction_started").length).toBe(2);
+		expect(events.filter((event) => event.type === "retry_started").length).toBe(2);
+		expect(JSON.stringify(events.filter((event) => event.type === "retry_started"))).not.toContain("abcdefghijklmnopqrstuvwxyz");
 	});
 });

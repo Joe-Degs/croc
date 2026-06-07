@@ -178,6 +178,8 @@ function createTruncationBadge(payload) {
 }
 
 const OUTPUT_COLLAPSE_LINE_LIMIT = 6;
+const TOOL_CONTENT_COLLAPSE_LINE_LIMIT = 10;
+const BASH_TAIL_COLLAPSE_LINE_LIMIT = 10;
 let outputBlockIdSeq = 0;
 
 function outputTextFromPayload(payload, options = {}) {
@@ -191,16 +193,32 @@ function outputLines(text) {
 }
 
 function outputNeedsDisclosure(text) {
-  return outputLines(text).length > OUTPUT_COLLAPSE_LINE_LIMIT;
+  return outputLines(text).length > outputLineLimit(this);
 }
 
-function collapsedOutputText(text) {
-  return outputLines(text).slice(0, OUTPUT_COLLAPSE_LINE_LIMIT).join("\n");
+function outputLineLimit(block) {
+  const limit = Number(block?.dataset?.lineLimit);
+  return Number.isSafeInteger(limit) && limit > 0 ? limit : OUTPUT_COLLAPSE_LINE_LIMIT;
+}
+
+function outputUsesTail(block) {
+  return block?.dataset?.collapseMode === 'tail';
+}
+
+function outputNeedsDisclosureForBlock(block, text) {
+  return outputLines(text).length > outputLineLimit(block);
+}
+
+function collapsedOutputText(block, text) {
+  const lines = outputLines(text);
+  const limit = outputLineLimit(block);
+  return outputUsesTail(block) ? lines.slice(-limit).join("\n") : lines.slice(0, limit).join("\n");
 }
 
 function outputDisclosureText(block, text) {
   if (block.dataset.expanded === "true") return "... (collapse output)";
-  const moreLines = Math.max(0, outputLines(text).length - OUTPUT_COLLAPSE_LINE_LIMIT);
+  const moreLines = Math.max(0, outputLines(text).length - outputLineLimit(block));
+  if (outputUsesTail(block)) return `... (showing last ${outputLineLimit(block)} lines, ${moreLines} earlier lines hidden, click to expand)`;
   return `... (${moreLines} more lines, click to expand)`;
 }
 
@@ -208,7 +226,29 @@ function updateOutputDisclosureLabel(button, block, text) {
   const expanded = block.dataset.expanded === "true";
   button.textContent = outputDisclosureText(block, text);
   button.setAttribute("aria-expanded", expanded ? "true" : "false");
-  button.setAttribute("aria-label", expanded ? "Collapse output" : `Expand output, ${Math.max(0, outputLines(text).length - OUTPUT_COLLAPSE_LINE_LIMIT)} more lines`);
+  button.setAttribute("aria-label", expanded ? "Collapse output" : `Expand output, ${Math.max(0, outputLines(text).length - outputLineLimit(block))} more lines`);
+}
+
+function toggleOutputBlockExpanded(block) {
+  block.dataset.expanded = block.dataset.expanded === "true" ? "false" : "true";
+  renderOutputBlockText(block);
+}
+
+function createOutputToggleButton(block, className) {
+  const button = document.createElement("button");
+  button.className = className;
+  button.type = "button";
+  if (typeof button.addEventListener === "function") {
+    button.addEventListener("click", () => toggleOutputBlockExpanded(block));
+  }
+  return button;
+}
+
+function updateOutputCollapseLabel(button, pre) {
+  button.textContent = "... (collapse output)";
+  button.setAttribute("aria-expanded", "true");
+  button.setAttribute("aria-label", "Collapse output");
+  button.setAttribute("aria-controls", pre.id);
 }
 
 function renderOutputBlockText(block) {
@@ -216,30 +256,36 @@ function renderOutputBlockText(block) {
   if (!pre) return;
   const text = block.dataset.rawText || "";
   const expanded = block.dataset.expanded === "true";
-  const visibleText = !expanded && outputNeedsDisclosure(text) ? collapsedOutputText(text) : text;
+  const visibleText = !expanded && outputNeedsDisclosureForBlock(block, text) ? collapsedOutputText(block, text) : text;
   pre.textContent = '';
   appendAnsiText(pre, visibleText);
 
   let button = block.querySelector('.worker-feed-output-disclosure');
-  if (!outputNeedsDisclosure(text)) {
+  let collapseButton = block.querySelector('.worker-feed-output-collapse');
+  if (!outputNeedsDisclosureForBlock(block, text)) {
     if (button && typeof button.remove === 'function') button.remove();
+    if (collapseButton && typeof collapseButton.remove === 'function') collapseButton.remove();
     return;
   }
   if (!button) {
-    button = document.createElement("button");
-    button.className = "worker-feed-output-disclosure";
-    button.type = "button";
-    if (typeof button.addEventListener === "function") {
-      button.addEventListener("click", () => {
-        block.dataset.expanded = block.dataset.expanded === "true" ? "false" : "true";
-        renderOutputBlockText(block);
-      });
-    }
-    block.appendChild(button);
+    button = createOutputToggleButton(block, "worker-feed-output-disclosure");
   }
   if (!pre.id) pre.id = `worker-feed-output-${++outputBlockIdSeq}`;
+  if (expanded) {
+    block.insertBefore(button, pre);
+  } else {
+    block.appendChild(button);
+  }
   button.setAttribute("aria-controls", pre.id);
   updateOutputDisclosureLabel(button, block, text);
+
+  if (expanded) {
+    if (!collapseButton) collapseButton = createOutputToggleButton(block, "worker-feed-output-collapse");
+    updateOutputCollapseLabel(collapseButton, pre);
+    block.appendChild(collapseButton);
+  } else if (collapseButton && typeof collapseButton.remove === 'function') {
+    collapseButton.remove();
+  }
 }
 
 function createOutputBlock(payload, options = {}) {
@@ -250,6 +296,8 @@ function createOutputBlock(payload, options = {}) {
   if (block.dataset) {
     block.dataset.rawText = text;
     block.dataset.expanded = "false";
+    if (Number.isSafeInteger(options.lineLimit) && options.lineLimit > 0) block.dataset.lineLimit = String(options.lineLimit);
+    if (options.collapseMode === 'tail') block.dataset.collapseMode = 'tail';
   }
 
   const pre = document.createElement("pre");
@@ -1173,7 +1221,7 @@ function renderLanesTasks(batch, sessions) {
     html += `    <span class="session-dot ${alive ? "alive" : "dead"}" title="${alive ? "session alive" : "session not active"}"></span>`;
     // View button: shows conversation stream when available
     const isViewingConv = viewerMode === 'conversation' && viewerTarget === laneSessionId;
-    html += `    <button class="session-view-btn${isViewingConv ? ' active' : ''}" onclick="viewConversation('${escapeHtml(laneSessionId)}')" title="View worker conversation">👁 View</button>`;
+    html += `    <button type="button" class="session-view-btn${isViewingConv ? ' active' : ''}" data-view-conversation-id="${escapeHtml(laneSessionId)}" title="View worker conversation">👁 View</button>`;
 
     html += `  </div>`;
     html += `</div>`;
@@ -1366,7 +1414,7 @@ function renderLanesTasks(batch, sessions) {
 
       const isViewingStatus = viewerMode === 'status-md' && viewerTarget === task.taskId;
       const eyeHtml = task.status !== 'pending'
-        ? `<button class="viewer-eye-btn${isViewingStatus ? ' active' : ''}" onclick="viewStatusMd('${escapeHtml(task.taskId)}')" title="View STATUS.md">👁</button>`
+        ? `<button type="button" class="viewer-eye-btn${isViewingStatus ? ' active' : ''}" data-view-status-task-id="${escapeHtml(task.taskId)}" title="View STATUS.md">👁</button>`
         : '';
 
       // #485 (revised): Show task title on a second grid row spanning task-id
@@ -1405,6 +1453,16 @@ function renderLanesTasks(batch, sessions) {
   }
 
   $lanesTasksBody.innerHTML = html;
+  wireLaneTaskViewerButtons();
+}
+
+function wireLaneTaskViewerButtons() {
+  $lanesTasksBody.querySelectorAll('[data-view-conversation-id]').forEach((button) => {
+    button.addEventListener('click', () => viewConversation(button.dataset.viewConversationId || ''));
+  });
+  $lanesTasksBody.querySelectorAll('[data-view-status-task-id]').forEach((button) => {
+    button.addEventListener('click', () => viewStatusMd(button.dataset.viewStatusTaskId || ''));
+  });
 }
 
 // ─── Render: Merge Agents ───────────────────────────────────────────────────
@@ -1800,7 +1858,7 @@ function renderMailboxAuditEvent(evt) {
   } else {
     direction = evt.from ? `${evt.from}` : '';
     messageType = type;
-    body = firstMessageText(evt, ['content', 'body', 'message', 'contentPreview']) || JSON.stringify(evt);
+    body = firstMessageText(evt, ['content', 'body', 'message', 'contentPreview', 'summary', 'preview']) || 'mailbox event recorded';
   }
 
   return renderMessageFeedItem({ time: ts, direction, type: messageType, status, body, className: `message-event-${messageClassSuffix(type)}` });
@@ -2432,22 +2490,33 @@ function openHistoricalWorkerFeed(batchId, agentId, sessionName) {
 
 function buildAgentEventsEndpoint(context) {
   const path = `/api/agent-events/${encodeURIComponent(context.agentId)}`;
-  if (!context.batchId) return path;
-  return `${path}?batchId=${encodeURIComponent(context.batchId)}`;
+  const params = new URLSearchParams();
+  if (context.batchId) params.set('batchId', context.batchId);
+  if (Number.isSafeInteger(v2LastSeq)) params.set('afterSeq', String(v2LastSeq));
+  const query = params.toString();
+  return query ? `${path}?${query}` : path;
 }
 
 function pollConversation() {
   // TP-107: prefer V2 agent events when available, fallback to legacy conversation
   const isV2 = !!viewerWorkerFeedContext;
+  if (isV2 && v2PollInFlight) {
+    v2PollFollowUpPending = true;
+    return;
+  }
+
   const endpoint = isV2
     ? buildAgentEventsEndpoint(viewerWorkerFeedContext)
     : `/api/conversation/${encodeURIComponent(viewerTarget)}`;
 
+  const requestId = isV2 ? ++v2PollRequestId : 0;
+  const requestGeneration = isV2 ? v2FeedGeneration : 0;
+  if (isV2) v2PollInFlight = true;
   fetch(endpoint)
     .then(r => isV2 ? r.json() : r.text())
     .then(data => {
       if (isV2) {
-        renderV2AgentEvents(data);
+        applyV2AgentEventsPollResponse(requestId, data, () => { v2PollFollowUpPending = true; }, requestGeneration);
         return;
       }
       // Legacy: data is JSONL text
@@ -2498,47 +2567,144 @@ function pollConversation() {
         requestAnimationFrame(() => { isProgrammaticScroll = false; });
       }
     })
-    .catch(() => {});
+    .catch(() => {})
+    .finally(() => {
+      if (!isV2) return;
+      if (requestGeneration !== v2FeedGeneration) return;
+      v2PollInFlight = false;
+      if (v2PollFollowUpPending && viewerWorkerFeedContext) {
+        v2PollFollowUpPending = false;
+        pollConversation();
+      }
+    });
 }
 
 // ── Runtime V2 agent event renderer (TP-107) ──────────────────────────────
 
 // Stable cursor for V2 event rendering.
-// Uses a signature string from the last rendered event so the sliding window
-// (server caps at 300) doesn't stall when new tail events push older ones out.
-let v2LastCursor = null; // signature of last rendered event
+let v2LastCursor = null; // legacy signature of last rendered unsequenced event
+let v2LastSeq = null;
 let v2FirstRender = true;
 let v2ToolGroups = new Map();
+let v2PollRequestId = 0;
+let v2LastAppliedRequestId = 0;
+let v2PollInFlight = false;
+let v2PollFollowUpPending = false;
+let v2FeedGeneration = 0;
+let v2LocalToolGroupId = 0;
+let v2AssistantStreamId = 0;
+let v2ThinkingStreamId = 0;
+let v2AssistantGroups = new Map();
+let v2ThinkingGroups = new Map();
+let v2ActiveAssistantKey = '';
+let v2ActiveThinkingKey = '';
+
+const MAX_WORKER_FEED_ITEMS = 500;
+const MAX_TOOL_GROUP_VISIBLE_LINES = 400;
+const MAX_STREAM_BLOCK_VISIBLE_CHARS = 64 * 1024;
+const WORKFLOW_PREVIEW_CHARS = 240;
+const WORKFLOW_LABEL_CHARS = 120;
 
 function resetV2FeedState() {
+  v2FeedGeneration += 1;
   v2LastCursor = null;
+  v2LastSeq = null;
   v2FirstRender = true;
   v2ToolGroups = new Map();
+  v2PollRequestId = 0;
+  v2LastAppliedRequestId = 0;
+  v2PollInFlight = false;
+  v2PollFollowUpPending = false;
+  v2LocalToolGroupId = 0;
+  v2AssistantStreamId = 0;
+  v2ThinkingStreamId = 0;
+  v2AssistantGroups = new Map();
+  v2ThinkingGroups = new Map();
+  v2ActiveAssistantKey = '';
+  v2ActiveThinkingKey = '';
 }
 
 function v2EventSignature(evt) {
   return `${evt.ts || 0}:${evt.type || ''}:${JSON.stringify(evt.payload || {}).slice(0, 80)}`;
 }
 
-function renderV2AgentEvents(events) {
+function normalizeAgentEventsResponse(data) {
+  if (Array.isArray(data)) {
+    return { events: data, minSeq: null, maxSeq: null, hasMore: false, cursorSatisfied: true, resetRequired: false, legacyArray: true };
+  }
+  if (data && typeof data === 'object' && Array.isArray(data.events)) {
+    return {
+      events: data.events,
+      minSeq: Number.isSafeInteger(data.minSeq) ? data.minSeq : null,
+      maxSeq: Number.isSafeInteger(data.maxSeq) ? data.maxSeq : null,
+      hasMore: data.hasMore === true,
+      cursorSatisfied: data.cursorSatisfied !== false,
+      resetRequired: data.resetRequired === true,
+      legacyArray: false,
+    };
+  }
+  return { events: [], minSeq: null, maxSeq: null, hasMore: false, cursorSatisfied: true, resetRequired: false, legacyArray: false };
+}
+
+function applyV2AgentEventsPollResponse(requestId, data, onHasMore, feedGeneration = v2FeedGeneration) {
+  if (feedGeneration !== v2FeedGeneration) return false;
+  if (requestId < v2LastAppliedRequestId) return false;
+  v2LastAppliedRequestId = requestId;
+  const envelope = normalizeAgentEventsResponse(data);
+  renderV2AgentEvents(envelope);
+  if (envelope.hasMore && typeof onHasMore === 'function') onHasMore();
+  return true;
+}
+
+function showV2FeedResetWarning() {
+  const container = ensureWorkerFeedContainer();
+  const warning = document.createElement('div');
+  warning.className = 'worker-feed-reset-warning';
+  warning.textContent = 'Feed cursor expired, reset to the latest events.';
+  container.appendChild(warning);
+}
+
+function renderV2AgentEvents(data) {
+  const envelope = normalizeAgentEventsResponse(data);
+  let events = envelope.events;
+  if (envelope.resetRequired) {
+    v2LastCursor = null;
+    v2LastSeq = null;
+    v2ToolGroups = new Map();
+    v2AssistantGroups = new Map();
+    v2ThinkingGroups = new Map();
+    v2FirstRender = true;
+  }
   if (!Array.isArray(events) || events.length === 0) {
     if (v2FirstRender) {
       $terminalBody.innerHTML = '<div class="conv-empty">No agent events yet…</div>';
     }
+    if (envelope.resetRequired) showV2FeedResetWarning();
     return;
+  }
+
+  const hasSeqCursor = Number.isSafeInteger(v2LastSeq) && !envelope.legacyArray;
+  if (hasSeqCursor) {
+    events = events.filter((event) => Number.isSafeInteger(event?.seq) && event.seq > v2LastSeq);
+    if (events.length === 0) return;
   }
 
   let container = $terminalBody.querySelector('.worker-feed');
 
-  if (v2FirstRender || !container) {
+  if (hasSeqCursor && !v2FirstRender && container) {
+    renderWorkerFeedBatch(events, container);
+    v2LastCursor = v2EventSignature(events[events.length - 1]);
+    updateV2LastSeq(events);
+  } else if (v2FirstRender || !container) {
+
     // First load or container missing: full render
     $terminalBody.innerHTML = '';
     container = ensureWorkerFeedContainer();
+    if (envelope.resetRequired) showV2FeedResetWarning();
     v2ToolGroups.clear();
-    for (const evt of events) {
-      renderWorkerFeedEvent(evt, container);
-    }
+    renderWorkerFeedBatch(events, container);
     v2LastCursor = v2EventSignature(events[events.length - 1]);
+    updateV2LastSeq(events);
     v2FirstRender = false;
   } else {
     // Incremental: find first unseen event after cursor
@@ -2556,27 +2722,33 @@ function renderV2AgentEvents(events) {
       // Cursor not found (rotation/restart): full re-render
       container.innerHTML = '';
       v2ToolGroups.clear();
-      for (const evt of events) {
-        renderWorkerFeedEvent(evt, container);
-      }
+      renderWorkerFeedBatch(events, container);
     } else if (cursorIdx < events.length - 1) {
       // Append only new events after cursor
       const newEvents = events.slice(cursorIdx + 1);
-      for (const evt of newEvents) {
-        renderWorkerFeedEvent(evt, container);
-      }
+      renderWorkerFeedBatch(newEvents, container);
     } else {
       // No new events
       return;
     }
 
     v2LastCursor = v2EventSignature(events[events.length - 1]);
+    updateV2LastSeq(events);
   }
 
   if (autoScrollOn) {
     isProgrammaticScroll = true;
     $terminalBody.scrollTop = $terminalBody.scrollHeight;
     requestAnimationFrame(() => { isProgrammaticScroll = false; });
+  }
+  compactWorkerFeed(container);
+}
+
+function updateV2LastSeq(events) {
+  for (const event of events) {
+    if (Number.isSafeInteger(event?.seq) && (!Number.isSafeInteger(v2LastSeq) || event.seq > v2LastSeq)) {
+      v2LastSeq = event.seq;
+    }
   }
 }
 
@@ -2587,11 +2759,51 @@ function ensureWorkerFeedContainer() {
     container.className = 'worker-feed';
     if (typeof container.setAttribute === 'function') {
       container.setAttribute('role', 'log');
+      container.setAttribute('aria-live', 'polite');
+      container.setAttribute('aria-relevant', 'additions text');
       container.setAttribute('aria-label', 'Worker activity feed');
     }
     $terminalBody.appendChild(container);
   }
   return container;
+}
+
+function appendBatchedFeedNodes(container, nodes) {
+  if (!container || !Array.isArray(nodes) || nodes.length === 0) return;
+  if (typeof document.createDocumentFragment === 'function') {
+    const fragment = document.createDocumentFragment();
+    for (const node of nodes) fragment.appendChild(node);
+    container.appendChild(fragment);
+    return;
+  }
+  for (const node of nodes) container.appendChild(node);
+}
+
+function renderWorkerFeedBatch(events, container) {
+  const staging = document.createElement('div');
+  for (const evt of events) renderWorkerFeedEvent(evt, staging);
+  appendBatchedFeedNodes(container, staging.children ? Array.from(staging.children) : []);
+}
+
+function compactWorkerFeed(container) {
+  if (!container || !container.children || container.children.length <= MAX_WORKER_FEED_ITEMS) return;
+  const hasCompactedNote = !!container.querySelector('.worker-feed-compacted-note');
+  const targetCount = hasCompactedNote ? MAX_WORKER_FEED_ITEMS : MAX_WORKER_FEED_ITEMS - 1;
+  let removed = 0;
+  for (const child of Array.from(container.children)) {
+    if (container.children.length <= targetCount) break;
+    if (child.classList?.contains('worker-feed-tool-pending')) continue;
+    if (typeof child.remove === 'function') {
+      child.remove();
+      removed += 1;
+    }
+  }
+  if (removed > 0 && !hasCompactedNote) {
+    const note = document.createElement('div');
+    note.className = 'worker-feed-note worker-feed-compacted-note';
+    note.textContent = 'Older feed items were compacted.';
+    container.insertBefore(note, container.firstChild || null);
+  }
 }
 
 function appendRenderedEvent(container, rendered) {
@@ -2647,6 +2859,77 @@ function payloadText(payload, fields) {
   return '';
 }
 
+function projectionValue(projection) {
+  if (!projection || typeof projection !== 'object') return undefined;
+  if (projection.version !== 1) return undefined;
+  return Object.prototype.hasOwnProperty.call(projection, 'value') ? projection.value : undefined;
+}
+
+function projectionTruncationPayload(projection) {
+  if (!projection || typeof projection !== 'object') return null;
+  const truncated = projection.truncated === true;
+  const redacted = projection.redacted === true;
+  if (!truncated && !redacted) return null;
+  return { truncated, redacted, visibleBytes: projection.visibleBytes };
+}
+
+function isPlainText(value) {
+  return typeof value === 'string';
+}
+
+function projectedString(payload, projectionField, valueField) {
+  const value = projectionValue(payload?.[projectionField]);
+  if (isPlainText(value)) return value;
+  if (value && typeof value === 'object' && isPlainText(value[valueField])) return value[valueField];
+  return '';
+}
+
+function projectedObject(payload, projectionField) {
+  const value = projectionValue(payload?.[projectionField]);
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function safePathLabel(path) {
+  return isPlainText(path) && path.trim() ? path : '(unknown path)';
+}
+
+function splitLogicalLines(text) {
+  return String(text ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+}
+
+function trimExcessTrailingBlankLines(lines) {
+  const trimmed = [...lines];
+  while (trimmed.length > 1 && trimmed[trimmed.length - 1] === '' && trimmed[trimmed.length - 2] === '') trimmed.pop();
+  return trimmed;
+}
+
+function cappedText(text, limit) {
+  const value = String(text ?? '');
+  return value.length > limit ? `${value.slice(0, limit)}…` : value;
+}
+
+function previewText(payload, fields, limit = WORKFLOW_PREVIEW_CHARS) {
+  const raw = payloadText(payload, fields).replace(/\s+/g, ' ').trim();
+  return cappedText(raw, limit);
+}
+
+function eventTypeLabel(type) {
+  return cappedText(String(type || 'event').replace(/_/g, ' ').replace(/\s+/g, ' ').trim(), WORKFLOW_LABEL_CHARS);
+}
+
+function renderProjectionNotice(container, projection) {
+  const meta = projectionTruncationPayload(projection);
+  if (!meta) return null;
+  const labels = [];
+  if (meta.redacted) labels.push('redacted');
+  if (meta.truncated) labels.push('truncated');
+  const note = document.createElement('div');
+  note.className = 'worker-feed-tool-notice';
+  note.textContent = labels.join(', ');
+  container.appendChild(note);
+  return note;
+}
+
 function normalizedToolName(payload) {
   return String(payload?.tool || payload?.displayMode || 'tool').toLowerCase();
 }
@@ -2683,72 +2966,217 @@ function fileOperationVerb(payload) {
   return toolLabel(payload);
 }
 
-function formatFileOperationTarget(payload) {
-  const path = payloadText(payload, ['path', 'filePath', 'target']);
+function fileOperationTargetParts(payload) {
+  const args = projectedObject(payload, 'argsProjection');
+  const path = safePathLabel(args.path || payloadText(payload, ['path', 'filePath', 'target']));
   const range = payloadText(payload, ['range', 'lineRange']);
-  const start = payload.startLine ?? payload.lineStart;
-  const end = payload.endLine ?? payload.lineEnd;
+  const start = args.offset ?? args.startLine ?? payload.startLine ?? payload.lineStart;
+  const end = args.endLine ?? payload.endLine ?? payload.lineEnd;
   const suffix = range || (start != null && end != null ? `${start}-${end}` : start != null ? String(start) : '');
-  return `${path || payloadText(payload, ['argsPreview', 'command'])}${suffix ? `:${suffix}` : ''}`;
+  return { path, suffix };
+}
+
+function formatFileOperationTarget(payload) {
+  const { path, suffix } = fileOperationTargetParts(payload);
+  return `${path}${suffix ? `:${suffix}` : ''}`;
+}
+
+function createFileOperationHeader(verb, payload) {
+  const header = document.createElement('div');
+  header.className = 'worker-feed-file-operation';
+
+  const action = document.createElement('span');
+  action.className = 'worker-feed-file-verb';
+  action.textContent = verb;
+  header.appendChild(action);
+  header.appendChild(document.createTextNode(' '));
+
+  const { path, suffix } = fileOperationTargetParts(payload);
+  const pathEl = document.createElement('span');
+  pathEl.className = 'worker-feed-file-path';
+  pathEl.textContent = path;
+  header.appendChild(pathEl);
+
+  if (suffix) {
+    const range = document.createElement('span');
+    range.className = 'worker-feed-line-range';
+    range.textContent = `:${suffix}`;
+    header.appendChild(range);
+  }
+
+  return header;
+}
+
+function toolBodyText(payload) {
+  const tool = normalizedToolName(payload);
+  const args = projectedObject(payload, 'argsProjection');
+  const details = projectedObject(payload, 'detailsProjection');
+  const result = projectedObject(payload, 'resultProjection');
+  if (tool.includes('write')) return isPlainText(args.content) ? args.content : payloadText(payload, ['snippet', 'contentPreview', 'text']);
+  if (tool.includes('edit')) {
+    if (isPlainText(details.diff)) return details.diff;
+    if (isPlainText(details.patch)) return details.patch;
+    if (isPlainText(args.edits)) return args.edits;
+    if (Array.isArray(args.edits)) return args.edits.map((edit) => typeof edit === 'string' ? edit : previewText(edit, ['summary', 'oldText', 'newText'], 120)).filter(Boolean).join('\n');
+    return payloadText(payload, ['snippet', 'diff', 'contentPreview', 'text', 'summary']);
+  }
+  if (tool.includes('read')) {
+    if (isPlainText(result.content)) return result.content;
+    const detailValue = projectedObject(payload, 'detailsProjection');
+    if (isPlainText(detailValue.content)) return detailValue.content;
+    return payloadText(payload, ['text', 'snippet', 'contentPreview']);
+  }
+  return payloadText(payload, ['snippet', 'diff', 'contentPreview']);
+}
+
+function diffLineClass(line) {
+  if (line.startsWith('@@')) return 'worker-feed-diff-line worker-feed-diff-hunk';
+  if (line.startsWith('diff --git') || line.startsWith('+++') || line.startsWith('---')) return 'worker-feed-diff-line worker-feed-diff-meta';
+  if (line.startsWith('+')) return 'worker-feed-diff-line worker-feed-diff-added';
+  if (line.startsWith('-')) return 'worker-feed-diff-line worker-feed-diff-removed';
+  return 'worker-feed-diff-line worker-feed-diff-context';
+}
+
+function renderProjectedDiffBlock(group, diff) {
+  const block = document.createElement('div');
+  block.className = 'worker-feed-tool-diff worker-feed-diff worker-feed-tool-content';
+  const lines = trimExcessTrailingBlankLines(splitLogicalLines(diff)).slice(0, MAX_TOOL_GROUP_VISIBLE_LINES);
+  for (const line of lines) {
+    const row = document.createElement('span');
+    row.className = diffLineClass(line);
+    row.textContent = line;
+    block.appendChild(row);
+  }
+  if (splitLogicalLines(diff).length > lines.length) {
+    const note = document.createElement('div');
+    note.className = 'worker-feed-tool-notice';
+    note.textContent = 'additional diff lines omitted';
+    block.appendChild(note);
+  }
+  group.body.appendChild(block);
+  group.output = block;
+  return block;
+}
+
+function renderProjectedTextBlock(group, text, options = {}) {
+  const block = createOutputBlock({ output: String(text ?? '') }, {
+    lineLimit: options.lineLimit || TOOL_CONTENT_COLLAPSE_LINE_LIMIT,
+    collapseMode: options.collapseMode,
+    isError: options.isError,
+  });
+  block.classList.add('worker-feed-tool-content');
+  group.body.appendChild(block);
+  group.output = block;
+  return block;
+}
+
+function clearToolContent(group) {
+  if (!group?.body) return;
+  for (const child of Array.from(group.body.children || [])) {
+    if (child.classList?.contains('worker-feed-tool-content') && typeof child.remove === 'function') child.remove();
+  }
+  group.output = null;
 }
 
 function formatGenericToolCall(payload) {
-  const detail = payloadText(payload, ['argsPreview', 'path', 'summary', 'command']);
+  const detail = payloadText(payload, ['argsPreview', 'path', 'command']);
   return [toolLabel(payload), detail].filter(Boolean).join(' ');
 }
 
 function formatTerminalCommand(payload) {
-  const command = payloadText(payload, ['command']);
+  const args = projectedObject(payload, 'argsProjection');
+  const command = isPlainText(args.command) ? args.command : payloadText(payload, ['command']);
   if (command) return command;
   const tool = normalizedToolName(payload);
-  const args = payloadText(payload, ['argsPreview', 'path']);
-  if (isDirectTerminalToolName(tool)) return [toolLabel(payload), args].filter(Boolean).join(' ');
-  return args || toolLabel(payload);
+  const preview = payloadText(payload, ['argsPreview', 'path']);
+  if (isDirectTerminalToolName(tool)) return [toolLabel(payload), preview].filter(Boolean).join(' ');
+  return preview || toolLabel(payload);
+}
+
+function removeClassName(root, classes) {
+  const remove = new Set(classes);
+  root.className = root.className.split(/\s+/).filter((name) => name && !remove.has(name)).join(' ');
+}
+
+function setToolGroupStatus(group, status) {
+  if (!group || !group.root) return;
+  const normalized = ['pending', 'success', 'error'].includes(status) ? status : 'pending';
+  group.status = normalized;
+  removeClassName(group.root, ['worker-feed-tool-pending', 'worker-feed-tool-success', 'worker-feed-tool-error', 'worker-feed-error']);
+  group.root.classList.add(`worker-feed-tool-${normalized}`);
+  if (normalized === 'error') group.root.classList.add('worker-feed-error');
+  const text = normalized === 'success' ? 'completed' : normalized === 'error' ? 'failed' : 'pending';
+  if (!group.statusEl) {
+    group.statusEl = document.createElement('span');
+    group.statusEl.className = 'worker-feed-tool-state';
+    if (typeof group.statusEl.setAttribute === 'function') group.statusEl.setAttribute('aria-hidden', 'true');
+    if (group.body) group.body.appendChild(group.statusEl);
+    else group.root.appendChild(group.statusEl);
+  }
+  group.statusEl.textContent = text;
+  if (typeof group.root.setAttribute === 'function') group.root.setAttribute('aria-label', `${toolLabel(group.payload)} ${text}`);
+}
+
+function captureToolProjections(group, payload) {
+  group.argsProjection = payload.argsProjection || group.argsProjection;
+  group.partialResultProjection = payload.partialResultProjection || group.partialResultProjection;
+  group.resultProjection = payload.resultProjection || group.resultProjection;
+  group.detailsProjection = payload.detailsProjection || group.detailsProjection;
 }
 
 function createTerminalRun(evt, payload) {
   const { root, body } = createTranscriptEntry('terminal-run');
   root.classList.add('worker-feed-tool-group');
-  if (payload.isError) root.classList.add('worker-feed-error');
-  if (payload.toolCallId && root.dataset) root.dataset.toolCallId = String(payload.toolCallId);
   const command = formatTerminalCommand(payload);
-  appendTextBlock(body, 'worker-feed-command', `$ ${command}`);
-  return { root, body, output: null, payload };
+  const header = appendTextBlock(body, 'worker-feed-command', `$ ${command}`);
+  const timeout = projectedObject(payload, 'argsProjection').timeout ?? payload.timeout;
+  if (timeout != null && timeout !== '') appendTextBlock(body, 'worker-feed-tool-notice', `timeout ${timeout}`);
+  const group = { root, header, body, output: null, payload, status: 'pending' };
+  captureToolProjections(group, payload);
+  setToolGroupStatus(group, payload.isError ? 'error' : 'pending');
+  return group;
 }
 
 function createFileOperationLine(evt, payload) {
 	const verb = fileOperationVerb(payload);
-	const { root, body } = createTranscriptEntry('file-tool');
+  const { root, body } = createTranscriptEntry('file-tool');
 	root.classList.add('worker-feed-tool-group');
 	root.classList.add(`worker-feed-${verb}-tool`);
-	if (payload.isError) root.classList.add('worker-feed-error');
-	if (payload.toolCallId && root.dataset) root.dataset.toolCallId = String(payload.toolCallId);
-	appendTextBlock(body, 'worker-feed-file-operation', `${verb} ${formatFileOperationTarget(payload)}`.trim());
-  const snippet = payloadText(payload, ['snippet', 'diff', 'contentPreview']);
+  const header = createFileOperationHeader(verb, payload);
+  body.appendChild(header);
+  const snippet = toolBodyText(payload);
   let output = null;
+  const group = { root, header, body, output, payload, status: 'pending' };
+  captureToolProjections(group, payload);
   if (snippet) {
-    output = createOutputBlock({ ...payload, text: snippet });
-    body.appendChild(output);
+    output = normalizedToolName(payload).includes('edit') && (projectedObject(payload, 'detailsProjection').diff || projectedObject(payload, 'detailsProjection').patch || payload.diff)
+      ? renderProjectedDiffBlock(group, snippet)
+      : renderProjectedTextBlock(group, snippet, { lineLimit: TOOL_CONTENT_COLLAPSE_LINE_LIMIT });
   }
-  return { root, body, output, payload };
+  setToolGroupStatus(group, payload.isError ? 'error' : 'pending');
+  return group;
 }
 
 function createGenericToolCallLine(evt, payload) {
   const { root, body } = createTranscriptEntry('tool-call');
   root.classList.add('worker-feed-tool-group');
-  if (payload.isError) root.classList.add('worker-feed-error');
-  if (payload.toolCallId && root.dataset) root.dataset.toolCallId = String(payload.toolCallId);
-  appendTextBlock(body, 'worker-feed-tool-call-line', formatGenericToolCall(payload));
-  return { root, body, output: null, payload };
+  const header = appendTextBlock(body, 'worker-feed-tool-call-line', formatGenericToolCall(payload));
+  const group = { root, header, body, output: null, payload, status: 'pending' };
+  captureToolProjections(group, payload);
+  setToolGroupStatus(group, payload.isError ? 'error' : 'pending');
+  return group;
 }
 
 function createTranscriptNote(evt, details) {
 	const text = String(details || '').trim();
 	if (!text) return null;
 	const { root, body } = createTranscriptEntry('note');
-	if (evt.type === 'agent_crashed' || evt.type === 'agent_killed' || evt.type === 'agent_timeout' || evt.payload?.isError) {
+	root.classList.add('worker-feed-lifecycle');
+	if (evt.type === 'agent_crashed' || evt.type === 'agent_timeout' || evt.payload?.isError) {
 		root.classList.add('worker-feed-error');
 	}
+	if (evt.payload?.success === true) root.classList.add('success');
+	if (evt.type === 'agent_killed' || evt.type === 'retry_started') root.classList.add('warning');
 	appendTextBlock(body, 'worker-feed-status-text', text);
 	return root;
 }
@@ -2756,24 +3184,36 @@ function createTranscriptNote(evt, details) {
 function renderWorkerFeedEvent(evt, container) {
   switch (evt.type || 'unknown') {
     case 'assistant_message':
-      container.appendChild(renderAssistantFeedEvent(evt));
+    case 'assistant_message_update':
+      appendRenderedEvent(container, renderAssistantFeedEvent(evt));
+      return;
+    case 'assistant_thinking_update':
+      appendRenderedEvent(container, renderThinkingFeedEvent(evt));
       return;
     case 'prompt_sent':
       container.appendChild(renderPromptFeedEvent(evt));
       return;
     case 'tool_call':
+    case 'tool_execution_start':
       renderToolCallFeedEvent(evt, container);
       return;
+    case 'tool_args_update':
+      renderToolArgsUpdateFeedEvent(evt, container);
+      return;
     case 'tool_output_update':
+    case 'tool_execution_update':
       renderToolOutputUpdateFeedEvent(evt, container);
       return;
     case 'tool_result':
+    case 'tool_execution_end':
       renderToolResultFeedEvent(evt, container);
       return;
     case 'context_usage':
     case 'context_pressure':
     case 'retry_started':
+    case 'retry_finished':
     case 'compaction_started':
+    case 'compaction_finished':
     case 'message_delivered':
 		case 'reply_sent':
 		case 'escalation_sent':
@@ -2800,7 +3240,37 @@ function renderWorkerFeedEvent(evt, container) {
 
 function renderAssistantFeedEvent(evt) {
   const payload = evt.payload || {};
-  return createTranscriptText('assistant', payloadText(payload, ['text', 'message']).slice(0, 2000));
+  const key = payload.messageId || payload.streamId || v2ActiveAssistantKey || `assistant-${++v2AssistantStreamId}`;
+  v2ActiveAssistantKey = String(key);
+  const baseText = payloadText(payload, ['text', 'message', 'snapshot']) || payloadText(payload, ['delta', 'content']);
+  const text = cappedText(baseText, MAX_STREAM_BLOCK_VISIBLE_CHARS);
+  let group = v2AssistantGroups.get(String(key));
+  if (!group) {
+    group = createTranscriptText('assistant', text);
+    group.textBlock = group.querySelector('.worker-feed-text');
+    v2AssistantGroups.set(String(key), group);
+  } else if (group.textBlock) {
+    group.textBlock.textContent = text;
+  }
+  if (payload.done === true || payload.final === true || payload.isFinal === true) v2ActiveAssistantKey = '';
+  return group.parentNode ? null : group;
+}
+
+function renderThinkingFeedEvent(evt) {
+  const payload = evt.payload || {};
+  const key = payload.messageId || payload.streamId || v2ActiveThinkingKey || `thinking-${++v2ThinkingStreamId}`;
+  v2ActiveThinkingKey = String(key);
+  const text = cappedText(payloadText(payload, ['text', 'message', 'snapshot', 'delta', 'content']) || 'thinking…', 2000);
+  let group = v2ThinkingGroups.get(String(key));
+  if (!group) {
+    group = createTranscriptText('thinking', text);
+    group.textBlock = group.querySelector('.worker-feed-text');
+    v2ThinkingGroups.set(String(key), group);
+  } else if (group.textBlock) {
+    group.textBlock.textContent = text;
+  }
+  if (payload.done === true || payload.final === true || payload.isFinal === true) v2ActiveThinkingKey = '';
+  return group.parentNode ? null : group;
 }
 
 function renderPromptFeedEvent(evt) {
@@ -2810,9 +3280,18 @@ function renderPromptFeedEvent(evt) {
 
 function renderToolCallFeedEvent(evt, container) {
   const payload = evt.payload || {};
+  const toolCallId = payload.toolCallId ? String(payload.toolCallId) : `local-tool-${++v2LocalToolGroupId}`;
+  const existing = v2ToolGroups.get(toolCallId);
+  if (existing) {
+    existing.payload = { ...existing.payload, ...payload };
+    captureToolProjections(existing, payload);
+    renderToolGroupProjection(existing, payload, { replace: false });
+    setToolGroupStatus(existing, payload.isError ? 'error' : existing.status || 'pending');
+    return;
+  }
   const group = createToolGroup(evt, payload);
   container.appendChild(group.root);
-  if (payload.toolCallId) v2ToolGroups.set(String(payload.toolCallId), group);
+  v2ToolGroups.set(toolCallId, group);
 }
 
 function createToolGroup(evt, payload) {
@@ -2821,22 +3300,66 @@ function createToolGroup(evt, payload) {
   return createGenericToolCallLine(evt, payload);
 }
 
-function ensureToolGroupOutput(group, payload) {
+function ensureToolGroupOutput(group, payload, options = {}) {
   if (group.output) return group.output;
-  group.output = createOutputBlock(payload || {}, { text: '' });
+  group.output = createOutputBlock(payload || {}, { text: '', ...options });
   group.body.appendChild(group.output);
   return group.output;
 }
 
+function ensurePendingToolGroup(evt, container) {
+  const payload = evt.payload || {};
+  const toolCallId = payload.toolCallId ? String(payload.toolCallId) : `local-tool-${++v2LocalToolGroupId}`;
+  let group = v2ToolGroups.get(toolCallId);
+  if (!group) {
+    group = createToolGroup(evt, payload);
+    v2ToolGroups.set(toolCallId, group);
+    container.appendChild(group.root);
+  }
+  group.payload = { ...group.payload, ...payload };
+  captureToolProjections(group, payload);
+  return group;
+}
+
+function renderToolGroupProjection(group, payload, options = {}) {
+  const tool = normalizedToolName({ ...group.payload, ...payload });
+  const text = toolBodyText({ ...group.payload, ...payload });
+  if (!text) return;
+  if (options.replace) clearToolContent(group);
+  if (tool.includes('edit') && (projectedObject(payload, 'detailsProjection').diff || projectedObject(payload, 'detailsProjection').patch || payload.diff)) {
+    renderProjectedDiffBlock(group, text);
+    renderProjectionNotice(group.body, payload.detailsProjection);
+    return;
+  }
+  if (tool.includes('bash') || tool.includes('shell') || tool.includes('terminal')) {
+    renderProjectedTextBlock(group, text, { lineLimit: BASH_TAIL_COLLAPSE_LINE_LIMIT, collapseMode: 'tail', isError: payload.isError === true });
+    renderProjectionNotice(group.body, payload.resultProjection || payload.partialResultProjection);
+    return;
+  }
+  renderProjectedTextBlock(group, text, { lineLimit: TOOL_CONTENT_COLLAPSE_LINE_LIMIT, isError: payload.isError === true });
+  renderProjectionNotice(group.body, payload.resultProjection || payload.detailsProjection || payload.argsProjection);
+}
+
+function renderToolArgsUpdateFeedEvent(evt, container) {
+  const payload = evt.payload || {};
+  const group = ensurePendingToolGroup(evt, container);
+  renderToolGroupProjection(group, payload, { replace: true });
+  setToolGroupStatus(group, 'pending');
+}
+
 function renderToolOutputUpdateFeedEvent(evt, container) {
   const payload = evt.payload || {};
-  const delta = String(payload.text ?? payload.outputDelta ?? '');
-  if (!delta && !payload.truncated) return;
+  const partial = projectedObject(payload, 'partialResultProjection');
+  const delta = payloadText(payload, ['text', 'outputDelta']);
+  const snapshot = String(partial.output ?? partial.content ?? payload.output ?? '');
+  if (!delta && !snapshot && !payload.truncated) return;
   const toolCallId = payload.toolCallId ? String(payload.toolCallId) : '';
-  const group = toolCallId ? v2ToolGroups.get(toolCallId) : null;
+  const group = toolCallId ? v2ToolGroups.get(toolCallId) || ensurePendingToolGroup(evt, container) : null;
   if (group) {
-    const output = ensureToolGroupOutput(group, { ...payload, text: '', outputDelta: '', output: '' });
-    appendOutputText(output, delta);
+    const tailOptions = isTerminalTool({ ...group.payload, ...payload }) ? { lineLimit: BASH_TAIL_COLLAPSE_LINE_LIMIT, collapseMode: 'tail' } : {};
+    const output = ensureToolGroupOutput(group, { ...payload, text: '', outputDelta: '', output: '' }, tailOptions);
+    if (delta) appendOutputText(output, delta);
+    else replaceOutputText(output, snapshot);
     const badge = createTruncationBadge(payload);
     if (badge) output.appendChild(badge);
     return;
@@ -2848,22 +3371,30 @@ function renderToolResultFeedEvent(evt, container) {
   const payload = evt.payload || {};
   const toolCallId = payload.toolCallId ? String(payload.toolCallId) : '';
   const group = toolCallId ? v2ToolGroups.get(toolCallId) : null;
-  const output = payloadText(payload, ['text', 'outputDelta', 'output', 'summary']);
+  const result = projectedObject(payload, 'resultProjection');
+  const details = projectedObject(payload, 'detailsProjection');
+  const output = String(result.output ?? result.content ?? details.output ?? details.content ?? payloadText(payload, ['text', 'outputDelta', 'output', 'summary']));
   if (group) {
-    if (payload.isError) group.root.classList.add('worker-feed-error');
-    if (output) {
-      const block = ensureToolGroupOutput(group, { ...payload, output: '' });
+    group.payload = { ...group.payload, ...payload };
+    captureToolProjections(group, payload);
+    setToolGroupStatus(group, payload.isError ? 'error' : 'success');
+    if (toolBodyText(group.payload)) {
+      renderToolGroupProjection(group, group.payload, { replace: true });
+    } else if (output) {
+      const tailOptions = isTerminalTool(group.payload) ? { lineLimit: BASH_TAIL_COLLAPSE_LINE_LIMIT, collapseMode: 'tail', isError: payload.isError === true } : { isError: payload.isError === true };
+      const block = ensureToolGroupOutput(group, { ...payload, output: '' }, tailOptions);
       if (payload.isError === true) block.classList.add('worker-feed-output-error', 'error');
-      if (payload.text != null || payload.output != null) replaceOutputText(block, output);
-      else appendOutputText(block, output);
-      const badge = createTruncationBadge(payload);
-      if (badge) block.appendChild(badge);
+      replaceOutputText(block, output);
     } else {
       appendTextBlock(group.body || group.root, 'worker-feed-status-text', payload.isError ? 'failed' : 'complete');
     }
     return;
   }
-  container.appendChild(renderUnpairedOutputBlock(evt, payload.isError ? 'tool failed' : 'tool result'));
+  const created = createToolGroup(evt, payload);
+  setToolGroupStatus(created, payload.isError ? 'error' : 'success');
+  if (toolBodyText(payload)) renderToolGroupProjection(created, payload, { replace: true });
+  else if (output) renderProjectedTextBlock(created, output, { lineLimit: BASH_TAIL_COLLAPSE_LINE_LIMIT, collapseMode: 'tail', isError: payload.isError === true });
+  container.appendChild(created.root);
 }
 
 function renderUnpairedOutputBlock(evt, label) {
@@ -2881,18 +3412,57 @@ function renderUnpairedOutputBlock(evt, label) {
 
 function renderStatusFeedEvent(evt) {
 	const payload = evt.payload || {};
-	const details = payloadText(payload, ['message', 'content', 'reason', 'summary']) || (payload.pct != null ? `${payload.pct}%` : '');
-	return createTranscriptNote(evt, details);
+	const attempt = payload.attempt != null ? `attempt ${payload.attempt}${payload.maxAttempts != null ? ` of ${payload.maxAttempts}` : ''}` : '';
+	const preview = previewText(payload, ['error', 'message', 'reason', 'content', 'text', 'preview', 'summary']);
+	const type = evt.type || '';
+	if (type === 'context_usage') {
+		const pct = payload.percent ?? payload.pct;
+		const pctNumber = typeof pct === 'number' ? pct : typeof pct === 'string' && pct.trim() ? Number(pct) : NaN;
+		const pctText = Number.isFinite(pctNumber) ? `context usage ${pctNumber}%` : 'context usage updated';
+		return createTranscriptNote(evt, pctText);
+	}
+	if (type === 'retry_started') return createTranscriptNote(evt, ['retry started', attempt, preview].filter(Boolean).join(': ').replace(': attempt', ', attempt'));
+	if (type === 'retry_finished') {
+		const state = payload.success === true ? 'succeeded' : payload.success === false || payload.isError === true ? 'failed' : 'finished';
+		return createTranscriptNote({ ...evt, payload: { ...payload, isError: state === 'failed', success: state === 'succeeded' } }, ['retry finished', attempt ? `${attempt} ${state}` : state, preview].filter(Boolean).join(': ').replace(': attempt', ', attempt'));
+	}
+	if (type === 'compaction_started') return createTranscriptNote(evt, ['compaction started', preview].filter(Boolean).join(': '));
+	if (type === 'compaction_finished') return createTranscriptNote({ ...evt, payload: { ...payload, isError: payload.success === false || payload.isError === true } }, [payload.success === false || payload.isError === true ? 'compaction failed' : 'compaction finished', preview].filter(Boolean).join(': '));
+	if (type === 'message_delivered') {
+		const label = payload.broadcast || payload.isBroadcast ? 'mailbox broadcast delivered' : payload.target || payload.to ? 'direct message delivered' : 'message delivered';
+		return createTranscriptNote(evt, [label, preview].filter(Boolean).join(': '));
+	}
+	if (type === 'reply_sent') return createTranscriptNote(evt, ['reply sent', preview].filter(Boolean).join(': '));
+	if (type === 'escalation_sent') return createTranscriptNote(evt, ['escalation sent', preview].filter(Boolean).join(': '));
+	if (type === 'exit_intercepted') return createTranscriptNote(evt, ['exit intercepted', payload.action, preview].filter(Boolean).join(': '));
+	return createTranscriptNote(evt, preview || String(type || 'status updated').replace(/_/g, ' '));
 }
 
 function renderLifecycleFeedEvent(evt) {
 	const payload = evt.payload || {};
-	const details = payloadText(payload, ['reason', 'message']) || (payload.exitCode != null ? `exit code ${payload.exitCode}` : '');
-	return createTranscriptNote(evt, details);
+	const preview = previewText(payload, ['message', 'error', 'reason']);
+	if (evt.type === 'agent_started') {
+		const cwd = previewText(payload, ['cwd'], WORKFLOW_LABEL_CHARS);
+		const model = previewText(payload, ['model'], WORKFLOW_LABEL_CHARS);
+		return createTranscriptNote(evt, ['agent started', cwd ? `in ${cwd}` : '', model ? `using ${model}` : ''].filter(Boolean).join(' '));
+	}
+	if (evt.type === 'agent_exited') {
+		const duration = payload.durationMs != null ? formatDuration(Number(payload.durationMs)) : payloadText(payload, ['duration']);
+		return createTranscriptNote({ ...evt, payload: { ...payload, success: true } }, ['agent exited', duration ? `after ${duration}` : ''].filter(Boolean).join(' '));
+	}
+	if (evt.type === 'agent_crashed') return createTranscriptNote(evt, ['agent crashed', payload.exitCode != null ? `with exit code ${payload.exitCode}` : '', preview ? `: ${preview}` : ''].filter(Boolean).join(' '));
+	if (evt.type === 'agent_killed') return createTranscriptNote(evt, ['agent killed', preview].filter(Boolean).join(': '));
+	if (evt.type === 'agent_timeout') {
+		const duration = payload.durationMs != null ? formatDuration(Number(payload.durationMs)) : payload.timeoutMs != null ? formatDuration(Number(payload.timeoutMs)) : payloadText(payload, ['duration']);
+		return createTranscriptNote(evt, ['agent timed out', duration ? `after ${duration}` : '', preview ? `: ${preview}` : ''].filter(Boolean).join(' '));
+	}
+	return createTranscriptNote(evt, eventTypeLabel(evt.type || 'agent event'));
 }
 
 function renderUnknownFeedEvent(evt) {
-	return createTranscriptNote(evt, [evt.type || 'event', JSON.stringify(evt.payload || {}).slice(0, 500)].filter(Boolean).join(' · '));
+	const payload = evt.payload || {};
+	const summary = previewText(payload, ['summary', 'message', 'reason', 'preview']);
+	return createTranscriptNote(evt, [eventTypeLabel(evt.type), evt.seq != null ? `seq ${evt.seq}` : '', summary].filter(Boolean).join(' · '));
 }
 
 // ── Segment-Scoped STATUS.md Helpers (TP-176) ──────────────────────────────
@@ -3283,7 +3853,7 @@ function closeViewer() {
 
 $terminalClose.addEventListener('click', closeViewer);
 
-// Make viewer functions available globally for onclick handlers
+// Make viewer actions available globally for external callers.
 window.viewConversation = viewConversation;
 window.viewStatusMd = viewStatusMd;
 window.openHistoricalWorkerFeed = openHistoricalWorkerFeed;
@@ -3451,7 +4021,7 @@ function renderHistorySummary(entry) {
       const agentId = historyTaskAgentId(t);
       const feedLabel = `Open worker feed for ${String(t.taskId)}`;
       const feedAction = agentId
-        ? `<button type="button" class="history-worker-feed-btn" aria-label="${escapeHtml(feedLabel)}" onclick="openHistoricalWorkerFeed(${escapeHtml(JSON.stringify(String(entry.batchId)))},${escapeHtml(JSON.stringify(String(agentId)))},${escapeHtml(JSON.stringify(String(t.taskId)))})">Worker feed</button>`
+        ? `<button type="button" class="history-worker-feed-btn" aria-label="${escapeHtml(feedLabel)}" data-history-batch-id="${escapeHtml(entry.batchId)}" data-history-agent-id="${escapeHtml(agentId)}" data-history-task-id="${escapeHtml(t.taskId)}">Worker feed</button>`
         : "—";
       html += `<tr>
         <td>${escapeHtml(t.taskId)}</td>
@@ -3469,6 +4039,15 @@ function renderHistorySummary(entry) {
   }
 
   $historyBody.innerHTML = html;
+  wireHistoryWorkerFeedButtons();
+}
+
+function wireHistoryWorkerFeedButtons() {
+  $historyBody.querySelectorAll('[data-history-batch-id][data-history-agent-id][data-history-task-id]').forEach((button) => {
+    button.addEventListener('click', () => {
+      openHistoricalWorkerFeed(button.dataset.historyBatchId || '', button.dataset.historyAgentId || '', button.dataset.historyTaskId || '');
+    });
+  });
 }
 
 /** Handle dropdown change. */

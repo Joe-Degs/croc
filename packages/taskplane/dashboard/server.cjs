@@ -571,6 +571,41 @@ function readRuntimeEventsJsonl(eventsPath) {
   return firstNewline >= 0 ? raw.slice(firstNewline + 1) : "";
 }
 
+function parseAfterSeq(value) {
+  if (typeof value !== "string" || !/^(0|[1-9]\d*)$/.test(value)) return null;
+  const seq = Number(value);
+  return Number.isSafeInteger(seq) ? seq : null;
+}
+
+function isValidEventSeq(seq) {
+  return Number.isSafeInteger(seq) && seq >= 0;
+}
+
+function buildAgentEventsCursorEnvelope(events, afterSeq, maxEvents) {
+  const sequenced = [];
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index];
+    if (!event || typeof event !== "object" || !isValidEventSeq(event.seq)) continue;
+    sequenced.push({ event, index });
+  }
+  sequenced.sort((a, b) => (a.event.seq - b.event.seq) || (a.index - b.index));
+
+  const minSeq = sequenced.length > 0 ? sequenced[0].event.seq : null;
+  const maxSeq = sequenced.length > 0 ? sequenced[sequenced.length - 1].event.seq : null;
+  const resetRequired = minSeq !== null && afterSeq < minSeq - 1;
+  const eligible = sequenced.filter((entry) => entry.event.seq > afterSeq);
+  const capped = eligible.slice(0, maxEvents).map((entry) => entry.event);
+
+  return {
+    events: capped,
+    minSeq,
+    maxSeq,
+    hasMore: eligible.length > capped.length,
+    cursorSatisfied: !resetRequired,
+    resetRequired,
+  };
+}
+
 /**
  * Load Runtime V2 agent events for a specific agent.
  * Returns the last N events from the agent's events.jsonl.
@@ -1642,12 +1677,23 @@ function createServer() {
       }
       // Optional: ?sinceTs= to return only events after a timestamp
       const sinceTs = parseInt(reqUrl.searchParams.get("sinceTs") || "0", 10);
-      let events = loadRuntimeAgentEvents(selectedBatchId, agentId, AGENT_EVENTS_LIMIT);
+      const afterSeqParam = reqUrl.searchParams.get("afterSeq");
+      const afterSeq = afterSeqParam === null ? null : parseAfterSeq(afterSeqParam);
+      if (afterSeqParam !== null && afterSeq === null) {
+        res.writeHead(400, { "Content-Type": "text/plain" });
+        res.end("Invalid afterSeq");
+        return;
+      }
+      let events = loadRuntimeAgentEvents(selectedBatchId, agentId, afterSeq !== null ? AGENT_EVENTS_LIMIT + 1 : AGENT_EVENTS_LIMIT);
       if (sinceTs > 0) {
         events = events.filter(e => (e.ts || 0) > sinceTs);
       }
       res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
-      res.end(JSON.stringify(events));
+      if (afterSeq !== null) {
+        res.end(JSON.stringify(buildAgentEventsCursorEnvelope(events, afterSeq, AGENT_EVENTS_LIMIT)));
+      } else {
+        res.end(JSON.stringify(events));
+      }
     } else if (pathname === "/api/state" && req.method === "GET") {
       const state = buildDashboardState();
       res.writeHead(200, {
