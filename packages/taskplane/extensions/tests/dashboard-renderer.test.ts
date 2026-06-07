@@ -6,6 +6,7 @@ import { expect } from "./expect.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_JS = resolve(__dirname, "../../dashboard/public/app.js");
+const STYLE_CSS = resolve(__dirname, "../../dashboard/public/style.css");
 
 function escapeText(value: string): string {
 	return value.replace(
@@ -64,6 +65,10 @@ class FakeElement {
 	tagName: string;
 	scrollHeight = 0;
 	scrollTop = 0;
+	id = "";
+	type = "";
+	private attributes: Record<string, string> = {};
+	private listeners: Record<string, Array<() => void>> = {};
 
 	constructor(tagName: string) {
 		this.tagName = tagName;
@@ -73,6 +78,28 @@ class FakeElement {
 		child.parentNode = this;
 		this.children.push(child);
 		return child;
+	}
+
+	remove(): void {
+		if (!this.parentNode) return;
+		this.parentNode.children = this.parentNode.children.filter((child) => child !== this);
+		this.parentNode = null;
+	}
+
+	setAttribute(name: string, value: string): void {
+		this.attributes[name] = String(value);
+	}
+
+	getAttribute(name: string): string | null {
+		return this.attributes[name] ?? null;
+	}
+
+	addEventListener(name: string, listener: () => void): void {
+		this.listeners[name] = [...(this.listeners[name] || []), listener];
+	}
+
+	click(): void {
+		for (const listener of this.listeners.click || []) listener();
 	}
 
 	insertBefore<T extends FakeElement | FakeText>(
@@ -114,7 +141,8 @@ class FakeElement {
 				.map((child) => {
 					if (child instanceof FakeText) return child.innerHTML;
 					const classAttr = child.className ? ` class="${escapeText(child.className)}"` : "";
-					return `<${child.tagName}${classAttr}>${child.innerHTML}</${child.tagName}>`;
+					const idAttr = child.id ? ` id="${escapeText(child.id)}"` : "";
+					return `<${child.tagName}${idAttr}${classAttr}>${child.innerHTML}</${child.tagName}>`;
 				})
 				.join("")
 		);
@@ -161,6 +189,8 @@ interface RendererHelpers {
 		options?: Record<string, unknown>,
 	) => FakeElement;
 	createTruncationBadge: (payload: Record<string, unknown>) => FakeElement | null;
+	appendOutputText: (outputBlock: FakeElement, text: string) => void;
+	replaceOutputText: (outputBlock: FakeElement, text: string) => void;
 	renderConvEvent: (event: Record<string, unknown>) => string | FakeElement;
 	renderV2Event: (event: Record<string, unknown>) => string | FakeElement;
 	renderV2AgentEvents: (events: Array<Record<string, unknown>>) => void;
@@ -180,7 +210,7 @@ function loadHelpers(): RendererHelpers {
 	return new Function(
 		"document",
 		"TextEncoder",
-		`${helperSrc}\nreturn { stripUnsupportedAnsiControls, createOutputBlock, createTruncationBadge };`,
+		`${helperSrc}\nreturn { stripUnsupportedAnsiControls, createOutputBlock, createTruncationBadge, appendOutputText, replaceOutputText };`,
 	)(fakeDocument, TextEncoder) as RendererHelpers;
 }
 
@@ -196,6 +226,7 @@ function loadRenderers(): RendererHelpers {
 		throw new Error("renderer block not found");
 	}
 	const rendererSrc = [
+		"let v2ToolGroups = new Map();",
 		src.slice(helperStart, helperEnd),
 		src.slice(v2Start, v2End),
 		src.slice(convStart, convEnd),
@@ -203,7 +234,7 @@ function loadRenderers(): RendererHelpers {
 	return new Function(
 		"document",
 		"TextEncoder",
-		`${rendererSrc}\nreturn { stripUnsupportedAnsiControls, createOutputBlock, createTruncationBadge, renderConvEvent, renderV2Event };`,
+		`${rendererSrc}\nreturn { stripUnsupportedAnsiControls, createOutputBlock, createTruncationBadge, appendOutputText, replaceOutputText, renderConvEvent, renderV2Event };`,
 	)(fakeDocument, TextEncoder) as RendererHelpers;
 }
 
@@ -229,7 +260,7 @@ function loadWorkerFeedRuntime(): RendererHelpers {
 			src.slice(v2Start, v2End),
 			"function getV2State() { return { v2LastCursor, v2FirstRender, groupCount: v2ToolGroups.size }; }",
 			"function setV2Cursor(cursor) { v2LastCursor = cursor; }",
-			"return { stripUnsupportedAnsiControls, createOutputBlock, createTruncationBadge, renderConvEvent: null, renderV2Event, renderV2AgentEvents, resetV2FeedState, buildAgentEventsEndpoint, getV2State, setV2Cursor, terminalBody: $terminalBody };",
+			"return { stripUnsupportedAnsiControls, createOutputBlock, createTruncationBadge, appendOutputText, replaceOutputText, renderConvEvent: null, renderV2Event, renderV2AgentEvents, resetV2FeedState, buildAgentEventsEndpoint, getV2State, setV2Cursor, terminalBody: $terminalBody };",
 		].join("\n"),
 	)(fakeDocument, TextEncoder, terminalBody, (fn: () => void) => fn()) as RendererHelpers;
 }
@@ -329,6 +360,47 @@ describe("dashboard safe output renderer", () => {
 		expect(block.textContent).not.toContain("short summary");
 	});
 
+	it("collapses long output with accessible disclosure button semantics", () => {
+		const helpers = loadHelpers();
+		const block = helpers.createOutputBlock({ output: "1\n2\n3\n4\n5\n6\n7\n8" });
+		const button = block.querySelector("button");
+		const pre = block.querySelector("pre");
+
+		expect(block.textContent).toContain("1\n2\n3\n4\n5\n6");
+		expect(block.textContent).not.toContain("7\n8");
+		expect(button?.type).toBe("button");
+		expect(button?.getAttribute("aria-expanded")).toBe("false");
+		expect(button?.getAttribute("aria-label")).toBe("Expand output, 2 more lines");
+		expect(button?.getAttribute("aria-controls")).toBe(pre?.id);
+		expect(button?.textContent).toBe("... (2 more lines, click to expand)");
+	});
+
+	it("does not collapse six lines with a trailing newline", () => {
+		const helpers = loadHelpers();
+		const block = helpers.createOutputBlock({ output: "1\n2\n3\n4\n5\n6\n" });
+
+		expect(block.querySelector("button")).toBe(null);
+		expect(block.textContent).toBe("1\n2\n3\n4\n5\n6\n");
+	});
+
+	it("keeps expanded output expanded after append and replace", () => {
+		const helpers = loadHelpers();
+		const block = helpers.createOutputBlock({ output: "1\n2\n3\n4\n5\n6\n7" });
+		block.querySelector("button")?.click();
+
+		expect(block.querySelector("button")?.getAttribute("aria-expanded")).toBe("true");
+		expect(block.textContent).toContain("7");
+
+		helpers.appendOutputText(block, "\n8");
+		expect(block.querySelector("button")?.getAttribute("aria-expanded")).toBe("true");
+		expect(block.textContent).toContain("8");
+
+		helpers.replaceOutputText(block, "a\nb\nc\nd\ne\nf\ng\nh");
+		expect(block.querySelector("button")?.getAttribute("aria-expanded")).toBe("true");
+		expect(block.textContent).toContain("g\nh");
+		expect(block.querySelector("button")?.textContent).toBe("... (collapse output)");
+	});
+
 	it("groups tool calls and final results by toolCallId", () => {
 		const helpers = loadWorkerFeedRuntime();
 
@@ -349,6 +421,306 @@ describe("dashboard safe output renderer", () => {
 		expect(groups.length).toBe(1);
 		expect(groups[0]?.querySelector(".worker-feed-output")?.textContent).toBe("pass\nfull output\n");
 		expect(helpers.terminalBody.querySelectorAll(".worker-feed-tool-result").length).toBe(0);
+	});
+
+	it("does not render visible grouped toolCallId text", () => {
+		const helpers = loadWorkerFeedRuntime();
+
+		helpers.renderV2AgentEvents([
+			{
+				type: "tool_call",
+				ts: "2026-06-06T00:00:00.000Z",
+				payload: { toolCallId: "call-1", tool: "bash", command: "npm test" },
+			},
+			{
+				type: "tool_result",
+				ts: "2026-06-06T00:00:01.000Z",
+				payload: { toolCallId: "call-1", tool: "bash", text: "pass" },
+			},
+		]);
+
+		expect(helpers.terminalBody.textContent).not.toContain("id call-1");
+		expect(helpers.terminalBody.textContent).not.toContain("call-1");
+	});
+
+	it("does not render visible unpaired toolCallId text", () => {
+		const helpers = loadWorkerFeedRuntime();
+
+		helpers.renderV2AgentEvents([
+			{
+				type: "tool_result",
+				ts: "2026-06-06T00:00:01.000Z",
+				payload: { toolCallId: "call-orphan", tool: "bash", text: "orphan output" },
+			},
+		]);
+
+		expect(helpers.terminalBody.textContent).toContain("orphan output");
+		expect(helpers.terminalBody.textContent).not.toContain("id call-orphan");
+		expect(helpers.terminalBody.textContent).not.toContain("call-orphan");
+	});
+
+	it("renders terminal tools as dollar-prefixed command runs", () => {
+		const helpers = loadRenderers();
+		const rendered = helpers.renderV2Event({
+			type: "tool_call",
+			ts: "2026-06-06T00:00:00.000Z",
+			payload: { toolCallId: "call-1", tool: "grep", command: "grep -R needle src" },
+		}) as FakeElement;
+
+		expect(rendered.querySelector(".worker-feed-command")?.textContent).toBe("$ grep -R needle src");
+		expect(rendered.textContent).not.toContain("GREP");
+	});
+
+	it("renders direct ls file tools as dollar-prefixed command runs", () => {
+		const helpers = loadRenderers();
+		const path =
+			"/Users/hubteluser/hubtel/maelstrom-croc-test/.croc/workspace/repos/app/.worktrees/hubteluser-20260606T225737/lane-2";
+		const rendered = helpers.renderV2Event({
+			type: "tool_call",
+			ts: "2026-06-06T00:00:00.000Z",
+			payload: {
+				toolCallId: "call-ls",
+				tool: "ls",
+				path,
+				argsPreview: path,
+				displayMode: "file",
+			},
+		}) as FakeElement;
+
+		expect(rendered.classList.contains("worker-feed-terminal-run")).toBe(true);
+		expect(rendered.querySelector(".worker-feed-command")?.textContent).toBe(`$ ls ${path}`);
+		expect(rendered.querySelector(".worker-feed-tool-call-line")).toBe(null);
+		expect(rendered.textContent).not.toContain("call-ls");
+	});
+
+	it("renders prompts in the prompt transcript primitive", () => {
+		const helpers = loadRenderers();
+		const rendered = helpers.renderV2Event({
+			type: "prompt_sent",
+			ts: "2026-06-06T00:00:00.000Z",
+			payload: { text: "run the server for me to test again" },
+		}) as FakeElement;
+
+		expect(rendered.classList.contains("worker-feed-prompt")).toBe(true);
+		expect(rendered.querySelector(".worker-feed-prompt-text")?.textContent).toBe(
+			"run the server for me to test again",
+		);
+	});
+
+	it("renders verbose terminal commands without trimming path-heavy content", () => {
+		const helpers = loadRenderers();
+		const command =
+			'rm -rf /Users/hubteluser/hubtel/movie-night-croc-test/.croc/workspace/packets/taskplane-tasks/TASK-007-add-end-to-end-smoke-tests-and-self-repair-broken-app-flows/ && cd /Users/hubteluser/hubtel/movie-night-croc-test/.croc/workspace/packets && git add -A && git commit -m "chore: remove empty TASK-007 folder that was causing discovery crash"';
+		const rendered = helpers.renderV2Event({
+			type: "tool_call",
+			ts: "2026-06-06T00:00:00.000Z",
+			payload: { toolCallId: "call-verbose", tool: "bash", command },
+		}) as FakeElement;
+
+		expect(rendered.querySelector(".worker-feed-command")?.textContent).toBe(`$ ${command}`);
+		expect(rendered.textContent).toContain(
+			"TASK-007-add-end-to-end-smoke-tests-and-self-repair-broken-app-flows",
+		);
+		expect(rendered.textContent).toContain(
+			"chore: remove empty TASK-007 folder that was causing discovery crash",
+		);
+		expect(rendered.textContent).not.toContain("call-verbose");
+	});
+
+	it("keeps command and output text wrappable in the worker feed", () => {
+		const css = readFileSync(STYLE_CSS, "utf8");
+
+		expect(css).toMatch(/\.worker-feed-command[\s\S]*?white-space: break-spaces;/);
+		expect(css).toMatch(/\.worker-feed-command[\s\S]*?overflow-wrap: anywhere;/);
+		expect(css).toMatch(/\.worker-feed-output,[\s\S]*?overflow-x: hidden;/);
+		expect(css).toMatch(/\.worker-feed-output pre,[\s\S]*?white-space: pre-wrap;/);
+		expect(css).toMatch(/\.worker-feed-output pre,[\s\S]*?overflow-wrap: anywhere;/);
+	});
+
+	it("renders web_search tools as compact catchall tool lines", () => {
+		const helpers = loadRenderers();
+		const rendered = helpers.renderV2Event({
+			type: "tool_call",
+			ts: "2026-06-06T00:00:00.000Z",
+			payload: {
+				toolCallId: "call-search",
+				tool: "web_search",
+				displayMode: "summary",
+				argsPreview: "Maelstrom download compiled release binary jepsen-io github releases",
+			},
+		}) as FakeElement;
+
+		expect(rendered.classList.contains("worker-feed-tool-call")).toBe(true);
+		expect(rendered.querySelector(".worker-feed-tool-call-line")?.textContent).toBe(
+			"web_search Maelstrom download compiled release binary jepsen-io github releases",
+		);
+		expect(rendered.textContent).not.toContain("call-search");
+		expect(rendered.textContent).not.toContain("TOOL");
+	});
+
+	it("renders web_fetch and unknown tools through the compact catchall", () => {
+		const helpers = loadRenderers();
+		const fetchRendered = helpers.renderV2Event({
+			type: "tool_call",
+			ts: "2026-06-06T00:00:00.000Z",
+			payload: {
+				toolCallId: "call-fetch",
+				tool: "web_fetch",
+				displayMode: "summary",
+				argsPreview: "https://fly.io/dist-sys/1/",
+			},
+		}) as FakeElement;
+		const unknownRendered = helpers.renderV2Event({
+			type: "tool_call",
+			ts: "2026-06-06T00:00:00.000Z",
+			payload: {
+				toolCallId: "call-custom",
+				tool: "custom_tool",
+				argsPreview: "inspect long custom argument",
+			},
+		}) as FakeElement;
+
+		expect(fetchRendered.querySelector(".worker-feed-tool-call-line")?.textContent).toBe(
+			"web_fetch https://fly.io/dist-sys/1/",
+		);
+		expect(unknownRendered.querySelector(".worker-feed-tool-call-line")?.textContent).toBe(
+			"custom_tool inspect long custom argument",
+		);
+		expect(`${fetchRendered.textContent} ${unknownRendered.textContent}`).not.toContain("call-");
+	});
+
+	it("groups catchall tool output and results without visible toolCallId text", () => {
+		const helpers = loadWorkerFeedRuntime();
+
+		helpers.renderV2AgentEvents([
+			{
+				type: "tool_call",
+				ts: "2026-06-06T00:00:00.000Z",
+				payload: {
+					toolCallId: "call-search",
+					tool: "web_search",
+					displayMode: "summary",
+					argsPreview: "Maelstrom compiled release",
+				},
+			},
+			{
+				type: "tool_output_update",
+				ts: "2026-06-06T00:00:01.000Z",
+				payload: { toolCallId: "call-search", tool: "web_search", text: "Searching SearXNG...\n" },
+			},
+			{
+				type: "tool_result",
+				ts: "2026-06-06T00:00:02.000Z",
+				payload: { toolCallId: "call-search", tool: "web_search", text: "Found compiled release" },
+			},
+		]);
+
+		const groups = helpers.terminalBody.querySelectorAll(".worker-feed-tool-call");
+		const outputs = helpers.terminalBody.querySelectorAll(".worker-feed-output");
+		expect(groups.length).toBe(1);
+		expect(groups[0]?.querySelector(".worker-feed-tool-call-line")?.textContent).toBe(
+			"web_search Maelstrom compiled release",
+		);
+		expect(outputs.length).toBe(1);
+		expect(outputs[0]?.textContent).toBe("Found compiled release");
+		expect(helpers.terminalBody.querySelectorAll(".worker-feed-tool-result").length).toBe(0);
+		expect(helpers.terminalBody.textContent).not.toContain("call-search");
+	});
+
+	it("groups direct ls file tool results as terminal command output", () => {
+		const helpers = loadWorkerFeedRuntime();
+		const path =
+			"/Users/hubteluser/hubtel/maelstrom-croc-test/.croc/workspace/repos/app/.worktrees/hubteluser-20260606T225737/lane-2";
+
+		helpers.renderV2AgentEvents([
+			{
+				type: "tool_call",
+				ts: "2026-06-06T00:00:00.000Z",
+				payload: {
+					toolCallId: "call-ls",
+					tool: "ls",
+					path,
+					argsPreview: path,
+					displayMode: "file",
+				},
+			},
+			{
+				type: "tool_result",
+				ts: "2026-06-06T00:00:01.000Z",
+				payload: {
+					toolCallId: "call-ls",
+					tool: "ls",
+					displayMode: "file",
+					text: ".git\n.tools/\ndocs/\nREADME.md\nstore/\nunique-id/",
+				},
+			},
+		]);
+
+		const groups = helpers.terminalBody.querySelectorAll(".worker-feed-terminal-run");
+		const outputs = helpers.terminalBody.querySelectorAll(".worker-feed-output");
+		expect(groups.length).toBe(1);
+		expect(groups[0]?.querySelector(".worker-feed-command")?.textContent).toBe(`$ ls ${path}`);
+		expect(outputs.length).toBe(1);
+		expect(outputs[0]?.textContent).toBe(".git\n.tools/\ndocs/\nREADME.md\nstore/\nunique-id/");
+		expect(helpers.terminalBody.querySelectorAll(".worker-feed-tool-call-line").length).toBe(0);
+		expect(helpers.terminalBody.textContent).not.toContain("call-ls");
+	});
+
+	it("renders read tools as compact read lines", () => {
+		const helpers = loadRenderers();
+		const rendered = helpers.renderV2Event({
+			type: "tool_call",
+			ts: "2026-06-06T00:00:00.000Z",
+			payload: { toolCallId: "call-1", tool: "read", path: "src/file.ts", startLine: 10, endLine: 20 },
+		}) as FakeElement;
+
+		expect(rendered.querySelector(".worker-feed-file-operation")?.textContent).toBe(
+			"read src/file.ts:10-20",
+		);
+		expect(rendered.classList.contains("worker-feed-file-tool")).toBe(true);
+		expect(rendered.classList.contains("worker-feed-read-tool")).toBe(true);
+		expect(rendered.textContent).not.toContain("call-1");
+	});
+
+	it("does not render lifecycle labels without lifecycle details", () => {
+		const helpers = loadWorkerFeedRuntime();
+
+		helpers.renderV2AgentEvents([
+			{
+				type: "agent_started",
+				ts: "2026-06-06T00:00:00.000Z",
+				payload: { agentId: "agent-1" },
+			},
+			{
+				type: "prompt_sent",
+				ts: "2026-06-06T00:00:01.000Z",
+				payload: { text: "do the work" },
+			},
+		]);
+
+		expect(helpers.terminalBody.textContent).toContain("do the work");
+		expect(helpers.terminalBody.textContent).not.toContain("agent started");
+	});
+
+	it("renders edit tools as compact edit lines with collapsible snippets", () => {
+		const helpers = loadRenderers();
+		const rendered = helpers.renderV2Event({
+			type: "tool_call",
+			ts: "2026-06-06T00:00:00.000Z",
+			payload: {
+				toolCallId: "call-1",
+				tool: "edit",
+				path: "src/file.ts",
+				snippet: "-1\n-2\n-3\n-4\n-5\n-6\n-7\n-8",
+			},
+		}) as FakeElement;
+
+		expect(rendered.querySelector(".worker-feed-file-operation")?.textContent).toBe(
+			"edit src/file.ts",
+		);
+		expect(rendered.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
+		expect(rendered.textContent).toContain("... (2 more lines, click to expand)");
+		expect(rendered.textContent).not.toContain("-7\n-8");
 	});
 
 	it("appends tool_output_update to the matching output block", () => {
