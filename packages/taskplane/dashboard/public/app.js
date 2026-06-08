@@ -3017,11 +3017,11 @@ function renderProjectionNotice(container, projection) {
 }
 
 function normalizedToolName(payload) {
-  return String(payload?.tool || payload?.displayMode || 'tool').toLowerCase();
+  return toolLabel(payload).toLowerCase();
 }
 
 function toolLabel(payload) {
-  return String(payload?.tool || payload?.displayMode || 'tool');
+  return textFromStructuredValue(payload?.tool) || textFromStructuredValue(payload?.displayMode) || 'tool';
 }
 
 function isDirectTerminalToolName(tool) {
@@ -3030,7 +3030,7 @@ function isDirectTerminalToolName(tool) {
 
 function isTerminalTool(payload) {
   const tool = normalizedToolName(payload);
-  const mode = String(payload?.displayMode || '').toLowerCase();
+  const mode = textFromStructuredValue(payload?.displayMode).toLowerCase();
   return mode === 'terminal' || isDirectTerminalToolName(tool) || ['bash', 'shell', 'terminal'].some(name => tool.includes(name));
 }
 
@@ -3175,7 +3175,7 @@ function formatGenericToolCall(payload) {
 
 function formatTerminalCommand(payload) {
   const args = projectedObject(payload, 'argsProjection');
-  const command = isPlainText(args.command) ? args.command : payloadText(payload, ['command']);
+  const command = textFromStructuredValue(args.command) || payloadText(payload, ['command']);
   if (command) return command;
   const tool = normalizedToolName(payload);
   const preview = payloadText(payload, ['argsPreview', 'path']);
@@ -3498,7 +3498,7 @@ function renderUnpairedOutputBlock(evt, label) {
   const payload = evt.payload || {};
   const { root, body } = createTranscriptEntry('tool-result');
   if (payload.isError) root.classList.add('worker-feed-error');
-  const context = [label, toolLabel(payload), payload.command, payload.path, payload.argsPreview]
+  const context = [label, toolLabel(payload), textFromStructuredValue(payload.command), textFromStructuredValue(payload.path), textFromStructuredValue(payload.argsPreview)]
     .filter(Boolean)
     .join(' · ');
   if (context) appendTextBlock(body, 'worker-feed-context', context);
@@ -3845,19 +3845,19 @@ function renderConvEvent(event) {
 
     case "tool_call": {
       const name = event.toolName || "unknown";
-      const argsStr = event.args?.path || event.args?.command || "";
+      const argsStr = textFromStructuredValue(event.args?.path) || textFromStructuredValue(event.args?.command) || textFromStructuredValue(event.args);
       return `<div class="conv-tool-call"><span class="conv-tool-name">🔧 ${escapeHtml(name)}</span> <span class="conv-tool-args">${escapeHtml(String(argsStr).substring(0, 200))}</span></div>`;
     }
 
     case "tool_execution_start": {
       const name = event.toolName || "unknown";
-      const argsStr = event.args?.path || event.args?.command || "";
+      const argsStr = textFromStructuredValue(event.args?.path) || textFromStructuredValue(event.args?.command) || textFromStructuredValue(event.args);
       return `<div class="conv-tool-call"><span class="conv-tool-name">🔧 ${escapeHtml(name)}</span> <span class="conv-tool-args">${escapeHtml(String(argsStr).substring(0, 200))}</span></div>`;
     }
 
     case "tool_result": {
-      const output = event.output || event.result || "";
-      const truncated = String(output).length > 500 ? String(output).substring(0, 500) + "…" : String(output);
+      const output = textFromStructuredValue(event.output) || textFromStructuredValue(event.result);
+      const truncated = output.length > 500 ? output.substring(0, 500) + "…" : output;
       return createConvOutputEvent("conv-tool-result", truncated);
     }
 

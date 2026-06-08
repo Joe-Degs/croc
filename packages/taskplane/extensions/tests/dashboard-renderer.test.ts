@@ -579,6 +579,25 @@ describe("dashboard safe output renderer", () => {
 		expect(block.innerHTML).toContain("&lt;img src=x onerror=alert(1)&gt; &amp; done");
 	});
 
+	it("renders structured legacy tool events without object coercion", () => {
+		const helpers = loadRenderers();
+
+		const call = helpers.renderConvEvent({
+			type: "tool_call",
+			toolName: "bash",
+			args: { command: { content: [{ text: "npm test", type: "text" }] } },
+		}) as string;
+		expect(call).toContain("npm test");
+		expect(call).not.toContain("[object Object]");
+
+		const result = helpers.renderConvEvent({
+			type: "tool_result",
+			output: { content: [{ text: "structured output", type: "text" }] },
+		}) as FakeElement;
+		expect(result.querySelector(".worker-feed-output")?.textContent).toBe("structured output");
+		expect(result.textContent).not.toContain("[object Object]");
+	});
+
 	it("renders Runtime V2 tool_result text before summary through the output primitive", () => {
 		const helpers = loadRenderers();
 		const rendered = helpers.renderV2Event({
@@ -771,6 +790,27 @@ describe("dashboard safe output renderer", () => {
 		expect(helpers.terminalBody.textContent).not.toContain("call-orphan");
 	});
 
+	it("renders unpaired structured output context without object coercion", () => {
+		const helpers = loadWorkerFeedRuntime();
+
+		helpers.renderV2AgentEvents([
+			{
+				type: "tool_output_update",
+				payload: {
+					displayMode: { text: "terminal" },
+					command: { content: [{ text: "npm test", type: "text" }] },
+					path: { text: "/workspace/app" },
+					argsPreview: { text: "preview" },
+					text: "streamed output",
+				},
+			},
+		]);
+
+		expect(helpers.terminalBody.textContent).toContain("live output · terminal · npm test");
+		expect(helpers.terminalBody.textContent).toContain("streamed output");
+		expect(helpers.terminalBody.textContent).not.toContain("[object Object]");
+	});
+
 	it("renders terminal tools as dollar-prefixed command runs", () => {
 		const helpers = loadRenderers();
 		const rendered = helpers.renderV2Event({
@@ -781,6 +821,44 @@ describe("dashboard safe output renderer", () => {
 
 		expect(rendered.querySelector(".worker-feed-command")?.textContent).toBe("$ grep -R needle src");
 		expect(rendered.textContent).not.toContain("GREP");
+	});
+
+	it("renders structured terminal display mode as a command run", () => {
+		const helpers = loadRenderers();
+		const rendered = helpers.renderV2Event({
+			type: "tool_call",
+			ts: "2026-06-06T00:00:00.000Z",
+			payload: {
+				toolCallId: "call-structured-mode",
+				tool: "run_command",
+				displayMode: { text: "terminal" },
+				command: "npm test",
+			},
+		}) as FakeElement;
+
+		expect(rendered.querySelector(".worker-feed-command")?.textContent).toBe("$ npm test");
+		expect(rendered.textContent).not.toContain("[object Object]");
+	});
+
+	it("renders structured projection commands as dollar-prefixed command runs", () => {
+		const helpers = loadWorkerFeedRuntime();
+
+		helpers.renderV2AgentEvents([
+			{
+				type: "tool_execution_start",
+				payload: {
+					toolCallId: "bash-structured-command",
+					tool: "bash",
+					argsProjection: {
+						version: 1,
+						value: { command: { content: [{ text: "npm test", type: "text" }] } },
+					},
+				},
+			},
+		]);
+
+		expect(helpers.terminalBody.querySelector(".worker-feed-command")?.textContent).toBe("$ npm test");
+		expect(helpers.terminalBody.textContent).not.toContain("[object Object]");
 	});
 
 	it("renders bash projections, timeout, tail collapse, expanded output, and final errors", () => {
