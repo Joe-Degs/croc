@@ -6,7 +6,7 @@ batteries:
   webSearch:
     enabled: true
     provider: searxng
-    url: https://llm.hubtel.com/searxng
+    url: https://llm.proxy.com/searxng
 
 work:
   enabled: true
