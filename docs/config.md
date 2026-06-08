@@ -17,7 +17,7 @@ Use `schemas/croc.schema.json` for editor validation. YAML users can add this co
 | `runtime` | tmux and launch behavior |
 | `workspace` | optional Taskplane workspace bootstrap |
 | `skills` | Pi skill registration and generated work prompt skill references |
-| `pi` | Pi command, model, thinking, and provider registration |
+| `pi` | Pi command, model, thinking, and optional Pi provider registration |
 | `taskplane` | Taskplane package/config/dashboard settings |
 | `work` | portable Taskplane task packet materialization |
 | `batteries` | optional tools such as web search |
@@ -136,7 +136,64 @@ Croc does not overwrite existing `STATUS.md` files.
 
 ## Pi and Taskplane
 
-`pi.model` and `pi.thinking` set Pi defaults for Croc-launched sessions. If `pi.provider.enabled` is true, Croc registers the configured provider through its extension.
+Croc does not ship model, provider endpoint, credential, or thinking defaults. Omit model fields to let Pi use the user's normal model configuration.
+
+Use `pi.models` only when a project should register project-local providers through Croc's extension. `pi.models` follows Pi's `models.json` shape:
+
+| Field | Behavior |
+|-------|----------|
+| `pi.models.file` | optional path to a Pi `models.json`-shaped file; relative paths resolve from the Croc config file |
+| `pi.models.providers` | inline provider map using Pi provider entries |
+
+When both are set, Croc loads providers from `pi.models.file` first and then applies inline providers. Inline providers replace same-named file providers. Croc passes provider entries to Pi without resolving, copying, or logging credential values. Use Pi's normal value syntax for credentials: `$ENV_VAR`, `${ENV_VAR}`, `!command`, or a literal value.
+
+Full dummy provider shape:
+
+```yaml
+pi:
+  command: pi
+  model: example-llm/example-chat
+  thinking: high
+  models:
+    providers:
+      example-llm:
+        name: Example LLM
+        baseUrl: https://llm.example.invalid/v1
+        api: openai-completions
+        apiKey: "$EXAMPLE_LLM_API_KEY"
+        authHeader: true
+        models:
+          - id: example-chat
+            name: Example Chat
+            reasoning: false
+            input:
+              - text
+            contextWindow: 128000
+            maxTokens: 8192
+            cost:
+              input: 0
+              output: 0
+              cacheRead: 0
+              cacheWrite: 0
+
+taskplane:
+  workerModel: example-llm/example-chat
+  reviewerModel: example-llm/example-chat
+  mergeModel: example-llm/example-chat
+  supervisorModel: example-llm/example-chat
+  workerThinking: high
+  reviewerThinking: high
+  mergeThinking: high
+```
+
+External Pi models file:
+
+```yaml
+pi:
+  model: example-llm/example-chat
+  models:
+    file: ./models.json
+```
 
 Taskplane is bundled by default:
 
@@ -163,7 +220,7 @@ batteries:
   webSearch:
     enabled: true
     provider: searxng
-    url: https://llm.hubtel.com/searxng
+    url: https://searxng.example.invalid
 ```
 
 When enabled, Croc adds the configured web-search package to `.pi/settings.json` and passes `SEARXNG_URL` to Pi.

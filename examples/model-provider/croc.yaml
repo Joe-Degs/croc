@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=../../schemas/croc.schema.json
+configVersion: 1
+profile: model-provider
+
+pi:
+  command: pi
+  model: example-llm/example-chat
+  thinking: high
+  models:
+    providers:
+      example-llm:
+        name: Example LLM
+        baseUrl: https://llm.example.invalid/v1
+        api: openai-completions
+        apiKey: "$EXAMPLE_LLM_API_KEY"
+        authHeader: true
+        models:
+          - id: example-chat
+            name: Example Chat
+            reasoning: false
+            input:
+              - text
+            contextWindow: 128000
+            maxTokens: 8192
+            cost:
+              input: 0
+              output: 0
+              cacheRead: 0
+              cacheWrite: 0
+
+taskplane:
+  workerModel: example-llm/example-chat
+  reviewerModel: example-llm/example-chat
+  mergeModel: example-llm/example-chat
+  supervisorModel: example-llm/example-chat
+  workerThinking: high
+  reviewerThinking: high
+  mergeThinking: high

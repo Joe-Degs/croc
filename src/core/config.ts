@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 export const APP_NAME = "croc";
@@ -9,7 +10,6 @@ export const CONFIG_FILE_NAME = "croc.json";
 export const CONFIG_FILE_NAMES = ["croc.yaml", "croc.yml", CONFIG_FILE_NAME] as const;
 export const CROC_CONFIG_VERSION = 1;
 
-export type ApiName = "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generate-content";
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 export type WorktreeLocation = "subdirectory" | "sibling";
 export type IntegrationMode = "manual" | "supervised" | "auto";
@@ -18,30 +18,11 @@ export type WorkOverwrite = "never" | "if-generated" | "always";
 export type TaskSize = "S" | "M" | "L";
 export type WorkspaceRepoMode = "create" | "clone" | "attach";
 
-export interface CrocProviderModelConfig {
-	id: string;
-	name: string;
-	reasoning: boolean;
-	input: ("text" | "image")[];
-	contextWindow: number;
-	maxTokens: number;
-	cost: {
-		input: number;
-		output: number;
-		cacheRead: number;
-		cacheWrite: number;
-	};
-}
+export type CrocPiProviderConfig = Parameters<ExtensionAPI["registerProvider"]>[1] | Record<string, unknown>;
 
-export interface CrocProviderConfig {
-	enabled: boolean;
-	name: string;
-	displayName: string;
-	baseUrl: string;
-	api: ApiName;
-	apiKeyEnv: string;
-	authHeader: boolean;
-	models: CrocProviderModelConfig[];
+export interface CrocPiModelsConfig {
+	file: string;
+	providers: Record<string, CrocPiProviderConfig>;
 }
 
 export interface CrocRuntimeConfig {
@@ -58,7 +39,7 @@ export interface CrocPiConfig {
 	thinking: "" | ThinkingLevel;
 	name: string;
 	extraArgs: string[];
-	provider: CrocProviderConfig;
+	models: CrocPiModelsConfig;
 }
 
 export interface CrocTaskplaneConfig {
@@ -238,29 +219,13 @@ export function createDefaultConfig(cwd: string): CrocConfig {
 		},
 		pi: {
 			command: "pi",
-			model: "hubtel/grm-2.6-plus",
-			thinking: "high",
+			model: "",
+			thinking: "",
 			name: sessionName,
 			extraArgs: [],
-			provider: {
-				enabled: false,
-				name: "hubtel",
-				displayName: "Hubtel LLM",
-				baseUrl: "https://llm.hubtel.com/v1",
-				api: "openai-completions",
-				apiKeyEnv: "HUBTEL_LLM_API_KEY",
-				authHeader: true,
-				models: [
-					{
-						id: "grm-2.6-plus",
-						name: "GRM 2.6 Plus",
-						reasoning: false,
-						input: ["text"],
-						contextWindow: 131072,
-						maxTokens: 8192,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					},
-				],
+			models: {
+				file: "",
+				providers: {},
 			},
 		},
 		taskplane: {
@@ -278,10 +243,10 @@ export function createDefaultConfig(cwd: string): CrocConfig {
 			workerModel: "",
 			reviewerModel: "",
 			mergeModel: "",
-			supervisorModel: "hubtel/grm-2.6-plus",
-			workerThinking: "high",
-			reviewerThinking: "high",
-			mergeThinking: "high",
+			supervisorModel: "",
+			workerThinking: "",
+			reviewerThinking: "",
+			mergeThinking: "",
 			supervisorAutonomy: "autonomous",
 			maxWorkerMinutes: 1440,
 			stallTimeoutMinutes: 120,
@@ -335,6 +300,10 @@ function mergeObjects(base: unknown, override: unknown): unknown {
 
 export function mergeConfig(defaults: CrocConfig, override: DeepPartial<CrocConfig>): CrocConfig {
 	return mergeObjects(defaults, override) as CrocConfig;
+}
+
+export function hasConfiguredPiModels(config: Pick<CrocConfig, "pi">): boolean {
+	return config.pi.models.file.length > 0 || Object.keys(config.pi.models.providers).length > 0;
 }
 
 export function getConfigPath(cwd: string, explicitPath?: string): string {

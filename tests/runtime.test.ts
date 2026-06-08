@@ -79,10 +79,6 @@ describe("orchestrator target resolution", () => {
 
 	it("passes the resolved task prompt path to /orch", () => {
 		assert.deepEqual(buildPiArgs(configWithTasks(), "TASK-004"), [
-			"--model",
-			"hubtel/grm-2.6-plus",
-			"--thinking",
-			"high",
 			"--name",
 			"croc-broadcast-demo",
 			"/orch packets/taskplane-tasks/TASK-004-implement-maelstrom-broadcast-challenge-part-3b/PROMPT.md",

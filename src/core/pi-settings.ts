@@ -98,9 +98,15 @@ export function writePiSettings(
 		const model = splitModel(config.pi.model);
 		settings.defaultModel = model.model;
 		if (model.provider) settings.defaultProvider = model.provider;
+		else delete settings.defaultProvider;
+	} else {
+		delete settings.defaultModel;
+		delete settings.defaultProvider;
 	}
 	if (config.pi.thinking) {
 		settings.defaultThinkingLevel = config.pi.thinking;
+	} else {
+		delete settings.defaultThinkingLevel;
 	}
 
 	writeJson(path, settings);

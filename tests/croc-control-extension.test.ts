@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -80,8 +81,8 @@ describe("Croc supervisor control extension", () => {
 	beforeEach(() => {
 		tempRoot = mkdtempSync(join(tmpdir(), "croc-control-extension-"));
 		oldCrocConfig = process.env.CROC_CONFIG;
-		oldApiKey = process.env.HUBTEL_LLM_API_KEY;
-		process.env.HUBTEL_LLM_API_KEY = "super-secret-test-value";
+		oldApiKey = process.env.CROC_TEST_API_KEY;
+		process.env.CROC_TEST_API_KEY = "super-secret-test-value";
 	});
 
 	afterEach(() => {
@@ -90,8 +91,8 @@ describe("Croc supervisor control extension", () => {
 		if (oldCrocConfig === undefined) delete process.env.CROC_CONFIG;
 		else process.env.CROC_CONFIG = oldCrocConfig;
 
-		if (oldApiKey === undefined) delete process.env.HUBTEL_LLM_API_KEY;
-		else process.env.HUBTEL_LLM_API_KEY = oldApiKey;
+		if (oldApiKey === undefined) delete process.env.CROC_TEST_API_KEY;
+		else process.env.CROC_TEST_API_KEY = oldApiKey;
 	});
 
 	it("registers the supervisor slash commands", () => {
@@ -108,6 +109,110 @@ describe("Croc supervisor control extension", () => {
 		for (const toolName of expectedTools) {
 			assert.ok(pi.tools.has(toolName), `${toolName} should be registered`);
 		}
+	});
+
+	it("does not register model providers by default", () => {
+		delete process.env.CROC_CONFIG;
+
+		const pi = activateExtension();
+
+		assert.equal(pi.providers.size, 0);
+	});
+
+	it("registers multiple inline Pi model providers", () => {
+		const configPath = join(tempRoot, "croc.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				pi: {
+					models: {
+						providers: {
+							alpha: {
+								baseUrl: "https://alpha.example.invalid/v1",
+								api: "openai-completions",
+								apiKey: "$ALPHA_API_KEY",
+								models: [{ id: "alpha-chat" }],
+							},
+							beta: {
+								baseUrl: "https://beta.example.invalid/v1",
+								api: "anthropic-messages",
+								apiKey: "$BETA_API_KEY",
+								models: [{ id: "beta-chat" }],
+							},
+						},
+					},
+				},
+			}),
+			"utf-8",
+		);
+		process.env.CROC_CONFIG = configPath;
+
+		const pi = activateExtension();
+
+		assert.deepEqual([...pi.providers.keys()].sort(), ["alpha", "beta"]);
+		assert.equal(providerRecord(pi, "alpha").apiKey, "$ALPHA_API_KEY");
+		assert.equal(providerRecord(pi, "beta").api, "anthropic-messages");
+	});
+
+	it("loads Pi models file providers and lets inline providers override them", () => {
+		const configDir = join(tempRoot, "project");
+		mkdirSync(configDir, { recursive: true });
+		writeFileSync(
+			join(configDir, "models.json"),
+			JSON.stringify({
+				providers: {
+					"file-only": {
+						baseUrl: "https://file-only.example.invalid/v1",
+						api: "openai-completions",
+						apiKey: "$FILE_ONLY_API_KEY",
+						models: [{ id: "file-chat" }],
+					},
+					shared: {
+						baseUrl: "https://file-shared.example.invalid/v1",
+						api: "openai-completions",
+						apiKey: "$FILE_SHARED_API_KEY",
+						models: [{ id: "file-shared-chat" }],
+					},
+				},
+			}),
+			"utf-8",
+		);
+		const configPath = join(configDir, "croc.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				pi: {
+					models: {
+						file: "models.json",
+						providers: {
+							shared: {
+								baseUrl: "https://inline-shared.example.invalid/v1",
+								api: "openai-responses",
+								apiKey: "$INLINE_SHARED_API_KEY",
+								models: [{ id: "inline-shared-chat" }],
+							},
+						},
+					},
+				},
+			}),
+			"utf-8",
+		);
+		process.env.CROC_CONFIG = configPath;
+
+		const pi = activateExtension();
+
+		assert.deepEqual([...pi.providers.keys()].sort(), ["file-only", "shared"]);
+		assert.equal(providerRecord(pi, "file-only").apiKey, "$FILE_ONLY_API_KEY");
+		assert.equal(providerRecord(pi, "shared").apiKey, "$INLINE_SHARED_API_KEY");
+		assert.equal(providerRecord(pi, "shared").baseUrl, "https://inline-shared.example.invalid/v1");
+	});
+
+	it("fails clearly when a configured Pi models file is missing", () => {
+		const configPath = join(tempRoot, "croc.json");
+		writeFileSync(configPath, JSON.stringify({ pi: { models: { file: "missing-models.json" } } }), "utf-8");
+		process.env.CROC_CONFIG = configPath;
+
+		assert.throws(() => activateExtension(), /Configured Pi models file not found: .*missing-models\.json/);
 	});
 
 	it("registers complete tool metadata and returns text for safe tool calls", async () => {
@@ -172,6 +277,21 @@ describe("Croc supervisor control extension", () => {
 
 		const doctorOutput = toolText(await executeTool(pi, "croc_doctor", {}, projectRoot));
 		assert.doesNotMatch(doctorOutput, /super-secret-test-value/);
+	});
+
+	it("redacts API key values from CLI config output", () => {
+		const { sessionConfigPath } = writeCrocWorkspace();
+
+		const result = spawnSync(
+			process.execPath,
+			["--experimental-strip-types", "--no-warnings", "src/cli.ts", "config", "--config", sessionConfigPath],
+			{ cwd: process.cwd(), encoding: "utf-8" },
+		);
+
+		assert.equal(result.status, 0, result.stderr);
+		assert.doesNotMatch(result.stdout, /super-secret-test-value/);
+		assert.match(result.stdout, /"apiKey": "\[redacted\]"/);
+		assert.match(result.stdout, /"authorization": "\[redacted\]"/);
 	});
 
 	it("resolves workflow status sourceRoot and configPath from .croc/session.json", async () => {
@@ -239,16 +359,21 @@ function crocConfig(profile: string): Record<string, unknown> {
 			tasksPath: "packets/tasks",
 		},
 		pi: {
-			provider: {
-				enabled: false,
-				name: "hubtel",
-				displayName: "Hubtel",
-				baseUrl: "https://token@example.invalid/v1?key=super-secret-test-value",
-				api: "openai-responses",
-				apiKeyEnv: "HUBTEL_LLM_API_KEY",
-				apiKey: "super-secret-test-value",
-				authHeader: true,
-				models: [],
+			models: {
+				providers: {
+					"test-provider": {
+						name: "Test Provider",
+						baseUrl: "https://token@example.invalid/v1?key=super-secret-test-value",
+						api: "openai-responses",
+						apiKey: "super-secret-test-value",
+						headers: {
+							authorization: "Bearer super-secret-test-value",
+							"x-api-key": "super-secret-test-value",
+						},
+						authHeader: true,
+						models: [],
+					},
+				},
 			},
 		},
 		batteries: {
@@ -258,6 +383,16 @@ function crocConfig(profile: string): Record<string, unknown> {
 			},
 		},
 	};
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function providerRecord(pi: FakePi, name: string): Record<string, unknown> {
+	const provider = pi.providers.get(name);
+	assert.ok(isRecord(provider), `${name} provider should be an object`);
+	return provider;
 }
 
 async function executeCommand(

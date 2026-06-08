@@ -1,5 +1,6 @@
 import type { CrocConfig } from "./config.ts";
 import { getBundledTaskplanePackagePath, getCrocProviderExtensionPath } from "./paths.ts";
+import { validatePiModelsConfig } from "./pi-models.ts";
 import { writePiSettings } from "./pi-settings.ts";
 import {
 	collectSkillReferences,
@@ -44,6 +45,7 @@ function getSkillFiles(cwd: string, config: CrocConfig, configPath: string): Rec
 }
 
 export function applyConfig(cwd: string, config: CrocConfig, configPath: string): ApplyResult {
+	validatePiModelsConfig(config, configPath);
 	const workspace = prepareWorkspace(cwd, config, configPath);
 	const runtimeConfig = workspace.context.config;
 	const runtimeRoot = workspace.context.root;

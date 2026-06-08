@@ -17,13 +17,16 @@ function getPath(root: unknown, path: string[]): unknown {
 }
 
 describe("buildTaskplaneConfig", () => {
-	it("inherits child agent models by default while pinning the supervisor model", () => {
+	it("leaves agent models unset by default", () => {
 		const config = createDefaultConfig("/tmp/movie-night");
 		const generated = buildTaskplaneConfig(config);
 
 		assert.equal(getPath(generated, ["taskRunner", "worker", "model"]), "");
+		assert.equal(getPath(generated, ["taskRunner", "worker", "thinking"]), "");
 		assert.equal(getPath(generated, ["taskRunner", "reviewer", "model"]), "");
+		assert.equal(getPath(generated, ["taskRunner", "reviewer", "thinking"]), "");
 		assert.equal(getPath(generated, ["orchestrator", "merge", "model"]), "");
-		assert.equal(getPath(generated, ["orchestrator", "supervisor", "model"]), "hubtel/grm-2.6-plus");
+		assert.equal(getPath(generated, ["orchestrator", "merge", "thinking"]), "");
+		assert.equal(getPath(generated, ["orchestrator", "supervisor", "model"]), "");
 	});
 });

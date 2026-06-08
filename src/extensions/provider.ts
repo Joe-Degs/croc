@@ -1,18 +1,19 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
-import type { ExtensionAPI, ProviderConfig, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { parse as parseYaml } from "yaml";
 import { applyConfig } from "../core/apply.ts";
 import {
 	type CrocConfig,
-	type CrocProviderConfig,
-	type CrocProviderModelConfig,
 	createDefaultConfig,
 	type DeepPartial,
+	hasConfiguredPiModels,
 	mergeConfig,
 } from "../core/config.ts";
 import { getDashboardState, getDashboardUrl, startDashboard, stopDashboard } from "../core/dashboard.ts";
 import { runDoctor } from "../core/doctor.ts";
+import { getConfiguredPiProviders } from "../core/pi-models.ts";
+import { redactSecrets, redactSensitiveText } from "../core/redaction.ts";
 import { resolveRuntimeContext } from "../core/workspace.ts";
 
 interface CrocSessionRepo {
@@ -290,49 +291,12 @@ function formatApply(runtime: ActiveRuntime, confirm: boolean): string {
 		`Wrote ${result.piSettingsPath}`,
 	];
 	if (result.taskplanePreferencesPath) lines.push(`Wrote ${result.taskplanePreferencesPath}`);
-	if (runtime.config.pi.provider.enabled) lines.push(`Enabled provider extension ${result.providerExtensionPath}`);
+	if (hasConfiguredPiModels(runtime.config)) lines.push(`Enabled provider extension ${result.providerExtensionPath}`);
 	if (result.workspaceFiles.length > 0) lines.push(`Wrote ${result.workspaceFiles.length} workspace file(s)`);
 	if (result.createdRepos.length > 0) lines.push(`Prepared ${result.createdRepos.length} workspace repo(s)`);
 	if (result.skills.manifestPath) lines.push(`Wrote ${result.skills.manifestPath}`);
 	if (result.work.manifestPath) lines.push(`Wrote ${result.work.manifestPath}`);
 	return lines.join("\n");
-}
-
-function shouldRedactKey(key: string): boolean {
-	const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
-	if (normalized.endsWith("env")) return false;
-	return /apikey|secret|token|password|authorization|cookie|credential/.test(normalized);
-}
-
-function shouldRedactQueryParam(key: string): boolean {
-	const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
-	return (
-		normalized === "key" ||
-		normalized.endsWith("key") ||
-		/api|secret|token|password|credential|auth|signature|sig/.test(normalized)
-	);
-}
-
-function redactQueryParams(text: string): string {
-	return text.replace(/([?&])([^=&#\s]+)=([^&#\s]*)/g, (match, prefix: string, key: string) => {
-		return shouldRedactQueryParam(key) ? `${prefix}${key}=[redacted]` : match;
-	});
-}
-
-function redactSensitiveText(text: string): string {
-	return redactQueryParams(text)
-		.replace(/([a-z][a-z0-9+.-]*:\/\/)[^/?#\s@]+@/gi, "$1[redacted]@")
-		.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [redacted]");
-}
-
-function redactSecrets(value: unknown, key = ""): unknown {
-	if (shouldRedactKey(key)) return typeof value === "string" && value.length > 0 ? "[redacted]" : value;
-	if (typeof value === "string") return redactSensitiveText(value);
-	if (Array.isArray(value)) return value.map((entry) => redactSecrets(entry));
-	if (!isRecord(value)) return value;
-	const redacted: Record<string, unknown> = {};
-	for (const [entryKey, entryValue] of Object.entries(value)) redacted[entryKey] = redactSecrets(entryValue, entryKey);
-	return redacted;
 }
 
 function buildConfigOutput(runtime: ActiveRuntime): string {
@@ -367,35 +331,14 @@ function buildDynamicSystemPrompt(eventSystemPrompt: string, status: string): st
 	].join("\n");
 }
 
-function toModelConfig(model: CrocProviderModelConfig): ProviderModelConfig {
-	return {
-		id: model.id,
-		name: model.name,
-		reasoning: model.reasoning,
-		input: model.input,
-		contextWindow: model.contextWindow,
-		maxTokens: model.maxTokens,
-		cost: model.cost,
-	};
-}
-
-function toProviderConfig(provider: CrocProviderConfig): ProviderConfig {
-	return {
-		name: provider.displayName,
-		baseUrl: provider.baseUrl,
-		apiKey: `$${provider.apiKeyEnv}`,
-		api: provider.api,
-		authHeader: provider.authHeader,
-		models: provider.models.map(toModelConfig),
-	};
-}
-
 export default function (pi: ExtensionAPI) {
+	const startupConfigPath = process.env.CROC_CONFIG;
 	const startupConfig = readConfig(process.env.CROC_CONFIG);
 	const currentRuntime = (cwd: string) => resolveActiveRuntime(cwd, startupConfig);
-	const provider = startupConfig?.pi.provider;
-	if (provider?.enabled) {
-		pi.registerProvider(provider.name, toProviderConfig(provider));
+	if (startupConfig) {
+		for (const [name, provider] of getConfiguredPiProviders(startupConfig, startupConfigPath)) {
+			pi.registerProvider(name, provider);
+		}
 	}
 
 	pi.registerCommand("croc-status", {

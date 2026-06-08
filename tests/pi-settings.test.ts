@@ -49,4 +49,27 @@ describe("writePiSettings", () => {
 		assert.deepEqual(settings.extensions, ["/user/provider-extension.js", "/new/croc/dist/extensions/provider.js"]);
 		assert.deepEqual(settings.skills, ["/new/croc/skills/croc-workflow"]);
 	});
+
+	it("removes stale project-local Pi model defaults when Croc config leaves them unset", () => {
+		const piDir = join(tempDir, ".pi");
+		mkdirSync(piDir, { recursive: true });
+		writeFileSync(
+			join(piDir, "settings.json"),
+			JSON.stringify({
+				defaultModel: "old-model",
+				defaultProvider: "old-provider",
+				defaultThinkingLevel: "high",
+			}),
+			"utf-8",
+		);
+
+		const config = createDefaultConfig(tempDir);
+		writePiSettings(tempDir, config, "/new/croc/dist/extensions/provider.js", "/new/croc/packages/taskplane");
+
+		const settings = JSON.parse(readFileSync(join(piDir, "settings.json"), "utf-8"));
+
+		assert.equal(settings.defaultModel, undefined);
+		assert.equal(settings.defaultProvider, undefined);
+		assert.equal(settings.defaultThinkingLevel, undefined);
+	});
 });

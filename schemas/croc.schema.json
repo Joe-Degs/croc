@@ -43,7 +43,8 @@
 	"$defs": {
 		"apiName": {
 			"type": "string",
-			"enum": ["openai-completions", "openai-responses", "anthropic-messages", "google-generate-content"]
+			"minLength": 1,
+			"description": "Pi provider API name, for example openai-completions, openai-responses, anthropic-messages, or google-generative-ai."
 		},
 		"contentSource": {
 			"description": "Inline content or a file path resolved relative to the Croc config file.",
@@ -260,23 +261,34 @@
 						"type": "string"
 					}
 				},
-				"provider": {
-					"$ref": "#/$defs/provider"
+				"models": {
+					"$ref": "#/$defs/piModels"
+				}
+			}
+		},
+		"piModels": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"file": {
+					"type": "string",
+					"minLength": 1,
+					"description": "Optional path to a Pi models.json-shaped file. Relative paths resolve from the Croc config file."
+				},
+				"providers": {
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/provider"
+					},
+					"description": "Inline Pi provider map using the same provider entries as models.json. Inline providers override same-named providers from pi.models.file."
 				}
 			}
 		},
 		"provider": {
 			"type": "object",
-			"additionalProperties": false,
+			"additionalProperties": true,
 			"properties": {
-				"enabled": {
-					"type": "boolean"
-				},
 				"name": {
-					"type": "string",
-					"minLength": 1
-				},
-				"displayName": {
 					"type": "string",
 					"minLength": 1
 				},
@@ -287,9 +299,18 @@
 				"api": {
 					"$ref": "#/$defs/apiName"
 				},
-				"apiKeyEnv": {
+				"apiKey": {
 					"type": "string",
-					"minLength": 1
+					"minLength": 1,
+					"description": "Pi config value syntax: literal, $ENV_VAR, ${ENV_VAR}, or !command."
+				},
+				"headers": {
+					"type": "object",
+					"additionalProperties": { "type": "string" }
+				},
+				"compat": {
+					"type": "object",
+					"additionalProperties": true
 				},
 				"authHeader": {
 					"type": "boolean"
@@ -299,13 +320,19 @@
 					"items": {
 						"$ref": "#/$defs/providerModel"
 					}
+				},
+				"modelOverrides": {
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/providerModelOverride"
+					}
 				}
 			}
 		},
 		"providerModel": {
 			"type": "object",
-			"additionalProperties": false,
-			"required": ["id", "name", "reasoning", "input", "contextWindow", "maxTokens", "cost"],
+			"additionalProperties": true,
+			"required": ["id"],
 			"properties": {
 				"id": {
 					"type": "string",
@@ -315,8 +342,21 @@
 					"type": "string",
 					"minLength": 1
 				},
+				"api": {
+					"$ref": "#/$defs/apiName"
+				},
+				"baseUrl": {
+					"type": "string",
+					"minLength": 1
+				},
 				"reasoning": {
 					"type": "boolean"
+				},
+				"thinkingLevelMap": {
+					"type": "object",
+					"additionalProperties": {
+						"type": ["string", "null"]
+					}
 				},
 				"input": {
 					"type": "array",
@@ -336,13 +376,56 @@
 				"cost": {
 					"type": "object",
 					"additionalProperties": false,
-					"required": ["input", "output", "cacheRead", "cacheWrite"],
 					"properties": {
 						"input": { "type": "number", "minimum": 0 },
 						"output": { "type": "number", "minimum": 0 },
 						"cacheRead": { "type": "number", "minimum": 0 },
 						"cacheWrite": { "type": "number", "minimum": 0 }
 					}
+				},
+				"headers": {
+					"type": "object",
+					"additionalProperties": { "type": "string" }
+				},
+				"compat": {
+					"type": "object",
+					"additionalProperties": true
+				}
+			}
+		},
+		"providerModelOverride": {
+			"type": "object",
+			"additionalProperties": true,
+			"properties": {
+				"name": { "type": "string", "minLength": 1 },
+				"reasoning": { "type": "boolean" },
+				"thinkingLevelMap": {
+					"type": "object",
+					"additionalProperties": { "type": ["string", "null"] }
+				},
+				"input": {
+					"type": "array",
+					"items": { "type": "string", "enum": ["text", "image"] }
+				},
+				"cost": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"input": { "type": "number", "minimum": 0 },
+						"output": { "type": "number", "minimum": 0 },
+						"cacheRead": { "type": "number", "minimum": 0 },
+						"cacheWrite": { "type": "number", "minimum": 0 }
+					}
+				},
+				"contextWindow": { "type": "integer", "minimum": 1 },
+				"maxTokens": { "type": "integer", "minimum": 1 },
+				"headers": {
+					"type": "object",
+					"additionalProperties": { "type": "string" }
+				},
+				"compat": {
+					"type": "object",
+					"additionalProperties": true
 				}
 			}
 		},

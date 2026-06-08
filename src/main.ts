@@ -1,9 +1,10 @@
 import chalk from "chalk";
 import { parseArgs, printHelp } from "./cli/args.ts";
 import { applyConfig } from "./core/apply.ts";
-import { APP_NAME, loadConfig, VERSION, writeDefaultConfig } from "./core/config.ts";
+import { APP_NAME, hasConfiguredPiModels, loadConfig, VERSION, writeDefaultConfig } from "./core/config.ts";
 import { getDashboardState, getDashboardUrl, startDashboard, stopDashboard } from "./core/dashboard.ts";
 import { runDoctor } from "./core/doctor.ts";
+import { redactSecrets } from "./core/redaction.ts";
 import { attachTmux, startPi } from "./core/runtime.ts";
 import { resolveRuntimeContext } from "./core/workspace.ts";
 
@@ -71,7 +72,7 @@ async function run(rawArgs: string[]): Promise<void> {
 	const config = loaded.config;
 
 	if (args.command === "config") {
-		console.log(JSON.stringify(config, null, "\t"));
+		console.log(JSON.stringify(redactSecrets(config), null, "\t"));
 		return;
 	}
 
@@ -81,7 +82,7 @@ async function run(rawArgs: string[]): Promise<void> {
 		console.log(`Wrote ${result.taskplaneConfigPath}`);
 		console.log(`Wrote ${result.piSettingsPath}`);
 		if (result.taskplanePreferencesPath) console.log(`Wrote ${result.taskplanePreferencesPath}`);
-		if (config.pi.provider.enabled) console.log(`Enabled provider extension ${result.providerExtensionPath}`);
+		if (hasConfiguredPiModels(config)) console.log(`Enabled provider extension ${result.providerExtensionPath}`);
 		printSkillResult(result.skills);
 		printWorkResult(result.work);
 		return;

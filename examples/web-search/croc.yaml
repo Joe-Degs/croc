@@ -6,7 +6,7 @@ batteries:
   webSearch:
     enabled: true
     provider: searxng
-    url: https://llm.proxy.com/searxng
+    url: https://searxng.example.invalid
 
 work:
   enabled: true
