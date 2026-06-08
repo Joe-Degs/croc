@@ -2645,6 +2645,24 @@ const MAX_TOOL_GROUP_VISIBLE_LINES = 400;
 const MAX_STREAM_BLOCK_VISIBLE_CHARS = 64 * 1024;
 const WORKFLOW_PREVIEW_CHARS = 240;
 const WORKFLOW_LABEL_CHARS = 120;
+const WORKER_FEED_MIN_HEIGHT_PX = 248;
+const WORKER_FEED_ITEM_HEIGHT_PX = 84;
+const WORKER_FEED_MAX_HEIGHT_PX = 920;
+
+function workerFeedPaneMaxHeight(itemCount) {
+  const count = Number.isSafeInteger(itemCount) && itemCount > 0 ? itemCount : 1;
+  const height = Math.min(WORKER_FEED_MAX_HEIGHT_PX, WORKER_FEED_MIN_HEIGHT_PX + ((count - 1) * WORKER_FEED_ITEM_HEIGHT_PX));
+  return `min(${height}px, 72vh)`;
+}
+
+function syncWorkerFeedPaneHeight(container) {
+  if (!$terminalBody?.style || !container?.children) return;
+  $terminalBody.style.maxHeight = workerFeedPaneMaxHeight(container.children.length);
+}
+
+function resetTerminalBodyPaneHeight() {
+  if ($terminalBody?.style) $terminalBody.style.maxHeight = '';
+}
 
 function resetV2FeedState() {
   v2FeedGeneration += 1;
@@ -2700,11 +2718,15 @@ function applyV2AgentEventsPollResponse(requestId, data, onHasMore, feedGenerati
 function showV2FeedResetWarning() {
   const container = ensureWorkerFeedContainer();
   const existing = container.querySelector('.worker-feed-history-gap-warning');
-  if (existing) return existing;
+  if (existing) {
+    syncWorkerFeedPaneHeight(container);
+    return existing;
+  }
   const warning = document.createElement('div');
   warning.className = 'worker-feed-reset-warning worker-feed-history-gap-warning';
   warning.textContent = 'Feed history gap: older events are unavailable, keeping visible history and appending latest events.';
   container.appendChild(warning);
+  syncWorkerFeedPaneHeight(container);
   return warning;
 }
 
@@ -2781,12 +2803,14 @@ function renderV2AgentEvents(data) {
     updateV2LastSeq(events);
   }
 
+  compactWorkerFeed(container);
+  syncWorkerFeedPaneHeight(container);
+
   if (autoScrollOn) {
     isProgrammaticScroll = true;
     $terminalBody.scrollTop = $terminalBody.scrollHeight;
     requestAnimationFrame(() => { isProgrammaticScroll = false; });
   }
-  compactWorkerFeed(container);
 }
 
 function updateV2LastSeq(events) {
@@ -2810,6 +2834,7 @@ function ensureWorkerFeedContainer() {
     }
     $terminalBody.appendChild(container);
   }
+  syncWorkerFeedPaneHeight(container);
   return container;
 }
 
@@ -3945,6 +3970,7 @@ function closeViewer() {
   resetV2FeedState();
   lastStatusMdText = '';
   $terminalPanel.style.display = 'none';
+  resetTerminalBodyPaneHeight();
   $terminalBody.innerHTML = '';
 }
 

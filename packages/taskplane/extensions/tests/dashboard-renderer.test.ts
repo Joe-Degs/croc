@@ -1315,6 +1315,60 @@ describe("dashboard safe output renderer", () => {
 		expect(datasetValues(feed as FakeElement)).not.toContain("pending-secret");
 	});
 
+	it("grows the worker feed pane with visible history up to a cap", () => {
+		const helpers = loadWorkerFeedRuntime();
+		helpers.renderV2AgentEvents({
+			events: [
+				{ seq: 1, type: "prompt_sent", payload: { text: "short 1" } },
+				{ seq: 2, type: "prompt_sent", payload: { text: "short 2" } },
+			],
+			minSeq: 1,
+			maxSeq: 2,
+			cursorSatisfied: true,
+			resetRequired: false,
+		});
+
+		expect(helpers.terminalBody.style.maxHeight).toBe("min(332px, 72vh)");
+
+		helpers.renderV2AgentEvents({
+			events: Array.from({ length: 22 }, (_, index) => ({
+				seq: index + 1,
+				type: "prompt_sent",
+				payload: { text: `history ${index + 1}` },
+			})),
+			minSeq: 1,
+			maxSeq: 22,
+			cursorSatisfied: true,
+			resetRequired: false,
+		});
+
+		expect(helpers.terminalBody.style.maxHeight).toBe("min(920px, 72vh)");
+		expect(helpers.terminalBody.textContent).not.toContain("Feed history gap");
+	});
+
+	it("updates worker feed pane height when an empty reset envelope appends a gap warning", () => {
+		const helpers = loadWorkerFeedRuntime();
+		helpers.renderV2AgentEvents({
+			events: [{ seq: 1, type: "prompt_sent", payload: { text: "already visible" } }],
+			minSeq: 1,
+			maxSeq: 1,
+			cursorSatisfied: true,
+			resetRequired: false,
+		});
+
+		expect(helpers.terminalBody.style.maxHeight).toBe("min(248px, 72vh)");
+
+		helpers.renderV2AgentEvents({
+			events: [],
+			hasMore: false,
+			cursorSatisfied: false,
+			resetRequired: true,
+		});
+
+		expect(helpers.terminalBody.textContent).toContain("Feed history gap");
+		expect(helpers.terminalBody.style.maxHeight).toBe("min(332px, 72vh)");
+	});
+
 	it("renders Runtime V2 write projections safely with state text", () => {
 		const helpers = loadWorkerFeedRuntime();
 		helpers.renderV2AgentEvents([
