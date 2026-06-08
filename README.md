@@ -19,22 +19,19 @@ croc dashboard stop
 croc dashboard status
 ```
 
-## Install from GitHub Packages
+## Install from GitHub Releases
 
-Croc is published to GitHub Packages as `@joe-degs/croc`. Configure npm for the scope, then install the package:
-
-```bash
-npm config set @joe-degs:registry https://npm.pkg.github.com
-npm install -g @joe-degs/croc
-```
-
-If npm asks for authentication, log in with a GitHub token that can read packages:
+Croc release assets include a prebuilt npm tarball with `dist/`, so installs do not need `tsgo` or any build-time dependencies.
 
 ```bash
-npm login --scope=@joe-degs --registry=https://npm.pkg.github.com
+npm install -g https://github.com/Joe-Degs/croc/releases/download/v0.1.0/croc-0.1.0.tgz
 ```
 
-The published package includes `dist/`, so installs do not need `tsgo` or any build-time dependencies.
+For a different release, replace both version segments in the URL:
+
+```bash
+npm install -g https://github.com/Joe-Degs/croc/releases/download/vX.Y.Z/croc-X.Y.Z.tgz
+```
 
 Verify the install:
 

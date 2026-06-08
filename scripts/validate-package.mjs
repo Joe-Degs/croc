@@ -3,7 +3,7 @@
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 
-const expectedPackageName = "@joe-degs/croc";
+const expectedPackageName = "croc";
 const requiredFiles = ["dist/cli.js", "examples/model-provider/croc.yaml"];
 const forbiddenTextPattern = /hubtel|grm-2\.6|llm\.hubtel|HUBTEL_LLM_API_KEY/i;
 const searxngUrlPattern = /https?:\/\/[^\s<>]*searxng(?!\.example\.invalid)/i;

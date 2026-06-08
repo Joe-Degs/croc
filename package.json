@@ -1,5 +1,5 @@
 {
-	"name": "@joe-degs/croc",
+	"name": "croc",
 	"version": "0.1.0",
 	"description": "Taskplane launcher and profile manager for Pi",
 	"type": "module",
@@ -22,9 +22,6 @@
 		"schemas",
 		"README.md"
 	],
-	"publishConfig": {
-		"registry": "https://npm.pkg.github.com"
-	},
 	"workspaces": [
 		"packages/taskplane"
 	],
