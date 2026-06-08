@@ -19,6 +19,94 @@ croc dashboard stop
 croc dashboard status
 ```
 
+## Install from GitHub
+
+Croc is intended to run from a GitHub install for now:
+
+```bash
+npm install -g github:<owner>/<repo>
+```
+
+For a private repo or an SSH setup, use:
+
+```bash
+npm install -g git+ssh://git@github.com/<owner>/<repo>.git
+```
+
+The GitHub install runs the package `prepare` script, which builds `dist/` before npm links the `croc` binary.
+
+Verify the install:
+
+```bash
+croc version
+croc help
+```
+
+Requirements:
+
+- Node.js `>=22.19.0`
+- git on `PATH`
+- Pi installed and available on `PATH`
+- tmux on `PATH` if `runtime.tmux.enabled` is true
+
+## Quick start
+
+Create a config in your project:
+
+```bash
+croc init
+```
+
+Apply it to write project-local Pi and Taskplane settings:
+
+```bash
+croc apply
+croc doctor
+```
+
+Start a Croc-launched Pi session:
+
+```bash
+croc start all
+```
+
+If tmux is enabled, attach to the running session later:
+
+```bash
+croc attach
+```
+
+Start or inspect the dashboard:
+
+```bash
+croc dashboard start
+croc dashboard status
+```
+
+## Inside Pi
+
+Croc registers a provider extension that adds workflow controls to Croc-launched Pi sessions:
+
+```text
+/croc-status
+/croc-workflows
+/croc-doctor
+/croc-dashboard status
+/croc-config
+```
+
+Agents can also use matching tools:
+
+```text
+croc_status()
+croc_workflows()
+croc_doctor()
+croc_dashboard({ action: "status" })
+croc_config()
+```
+
+`/croc-apply --confirm` and `croc_apply({ confirm: true })` rewrite generated runtime files. Use them only after explicit operator confirmation.
+
 ## Configuration
 
 Croc reads `croc.yaml`, `croc.yml`, or `croc.json` from the current project unless `--config <path>` is provided. If more than one default config exists, pass `--config` so Croc does not guess.
