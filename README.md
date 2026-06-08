@@ -19,21 +19,22 @@ croc dashboard stop
 croc dashboard status
 ```
 
-## Install from GitHub
+## Install from GitHub Packages
 
-Croc is intended to run from a GitHub install for now:
-
-```bash
-npm install -g github:<owner>/<repo>
-```
-
-For a private repo or an SSH setup, use:
+Croc is published to GitHub Packages as `@joe-degs/croc`. Configure npm for the scope, then install the package:
 
 ```bash
-npm install -g git+ssh://git@github.com/<owner>/<repo>.git
+npm config set @joe-degs:registry https://npm.pkg.github.com
+npm install -g @joe-degs/croc
 ```
 
-The GitHub install runs the package `prepare` script, which builds `dist/` before npm links the `croc` binary.
+If npm asks for authentication, log in with a GitHub token that can read packages:
+
+```bash
+npm login --scope=@joe-degs --registry=https://npm.pkg.github.com
+```
+
+The published package includes `dist/`, so installs do not need `tsgo` or any build-time dependencies.
 
 Verify the install:
 

@@ -1,0 +1,98 @@
+name: Publish GitHub Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Ref to publish (tag, branch, or SHA). Defaults to the workflow ref.'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-github-package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      PACKAGE_REGISTRY: https://npm.pkg.github.com
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://npm.pkg.github.com
+          scope: '@joe-degs'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Verify tag matches package version
+        if: github.ref_type == 'tag'
+        run: |
+          expected="v$(node -p "require('./package.json').version")"
+          if [ "${GITHUB_REF_NAME}" != "${expected}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package version ${expected}."
+            exit 1
+          fi
+
+      - name: Build
+        run: npm run build
+
+      - name: Check
+        run: npm run check
+
+      - name: Test
+        run: npm test
+
+      - name: Validate package contents
+        run: npm run pack:check
+
+      - name: Check existing package version
+        id: package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          echo "name=${name}" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+          if npm view "${name}@${version}" version --registry="${PACKAGE_REGISTRY}" >/tmp/croc-package-version 2>/tmp/croc-package-view.err; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+            echo "${name}@${version} is already published."
+            exit 0
+          fi
+
+          if grep -E "(E404|404 Not Found)" /tmp/croc-package-view.err >/dev/null; then
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+            echo "${name}@${version} is not published yet."
+            exit 0
+          fi
+
+          cat /tmp/croc-package-view.err
+          exit 1
+
+      - name: Publish GitHub package
+        if: steps.package.outputs.exists != 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm publish --ignore-scripts
+
+      - name: Skip existing package
+        if: steps.package.outputs.exists == 'true'
+        run: echo "Skipped ${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }} because it is already published."
