@@ -26,3 +26,12 @@ description: Use when working inside a Croc-launched Pi and Taskplane workspace.
 3. Make the smallest correct change in the execution target repo.
 4. Run relevant checks or record blockers in `STATUS.md`.
 5. Keep unrelated files untouched.
+
+## Supervisor controls
+
+- Use `/croc-status` or `croc_status()` before changing workflow state.
+- Use `/croc-workflows` or `croc_workflows()` to inspect Taskplane settings, dashboard URL, and packet folders.
+- Use `/croc-doctor` or `croc_doctor()` when setup, routing, or generated runtime files look wrong.
+- Use `/croc-dashboard status` or `croc_dashboard({ action: "status" })` before starting or stopping the dashboard.
+- Do not run `/croc-apply --confirm` or `croc_apply({ confirm: true })` unless the user explicitly confirms Croc may rewrite generated runtime files.
+- Use `/croc-config` or `croc_config()` only when config detail is needed. Secret-looking values are redacted, but do not try to recover or print secrets.
