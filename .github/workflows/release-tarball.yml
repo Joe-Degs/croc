@@ -1,4 +1,4 @@
-name: Release Tarball
+name: Build Release Assets
 
 on:
   push:
@@ -10,13 +10,12 @@ on:
         description: 'Release tag to create or update, for example v0.1.0.'
         required: true
         type: string
-      ref:
-        description: 'Ref to build. Defaults to tag.'
+      source_ref:
+        description: 'Source ref to build/publish. Defaults to tag; use only for release recovery.'
         required: false
         type: string
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
   group: release-tarball-${{ github.event.inputs.tag || github.ref_name }}
@@ -25,19 +24,22 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-      SOURCE_REF: ${{ github.event.inputs.ref || github.event.inputs.tag || github.ref_name }}
+      SOURCE_REF: ${{ github.event.inputs.source_ref || github.event.inputs.tag || github.ref_name }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           ref: ${{ env.SOURCE_REF }}
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          node-version: 22
+          node-version: '22'
           cache: npm
 
       - name: Install dependencies
@@ -71,18 +73,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           version="${RELEASE_TAG#v}"
-          assets=(
-            release-assets/croc-darwin-arm64.tar.gz
-            release-assets/croc-darwin-x64.tar.gz
-            release-assets/croc-linux-arm64.tar.gz
-            release-assets/croc-linux-x64.tar.gz
-          )
+          cd release-assets
 
-          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-            gh release delete-asset "${RELEASE_TAG}" "croc-${version}.tgz" --yes 2>/dev/null || true
-            gh release upload "${RELEASE_TAG}" "${assets[@]}" --clobber
-          else
-            gh release create "${RELEASE_TAG}" "${assets[@]}" \
-              --title "${RELEASE_TAG}" \
-              --notes "Croc ${RELEASE_TAG}"
-          fi
+          gh release delete-asset "${RELEASE_TAG}" "croc-${version}.tgz" --yes 2>/dev/null || true
+
+          gh release create "${RELEASE_TAG}" \
+            --title "${RELEASE_TAG}" \
+            --notes "Croc ${RELEASE_TAG}" \
+            croc-darwin-arm64.tar.gz \
+            croc-darwin-x64.tar.gz \
+            croc-linux-arm64.tar.gz \
+            croc-linux-x64.tar.gz \
+            2>/dev/null || \
+          gh release upload "${RELEASE_TAG}" \
+            croc-darwin-arm64.tar.gz \
+            croc-darwin-x64.tar.gz \
+            croc-linux-arm64.tar.gz \
+            croc-linux-x64.tar.gz \
+            --clobber
