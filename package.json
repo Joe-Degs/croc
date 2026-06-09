@@ -31,6 +31,7 @@
 		"check": "biome check --write --error-on-warnings src tests && tsgo --noEmit",
 		"dev": "tsx src/cli.ts",
 		"pack:check": "node scripts/validate-package.mjs",
+		"release:assets": "node scripts/build-release-assets.mjs",
 		"prepublishOnly": "npm run build",
 		"test": "node --experimental-strip-types --no-warnings --test tests/*.test.ts"
 	},

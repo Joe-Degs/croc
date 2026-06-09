@@ -21,16 +21,23 @@ croc dashboard status
 
 ## Install from GitHub Releases
 
-Croc release assets include a prebuilt npm tarball with `dist/`, so installs do not need `tsgo` or any build-time dependencies.
+Croc release assets include prebuilt npm tarballs with `dist/`, so installs do not need `tsgo` or any build-time dependencies. Choose the asset for your platform:
 
 ```bash
-npm install -g https://github.com/Joe-Degs/croc/releases/download/v0.1.0/croc-0.1.0.tgz
+npm install -g https://github.com/Joe-Degs/croc/releases/download/v0.1.0/croc-linux-x64.tar.gz
 ```
 
-For a different release, replace both version segments in the URL:
+Available release assets:
+
+- `croc-darwin-arm64.tar.gz`
+- `croc-darwin-x64.tar.gz`
+- `croc-linux-arm64.tar.gz`
+- `croc-linux-x64.tar.gz`
+
+For a different release, replace the version in the URL:
 
 ```bash
-npm install -g https://github.com/Joe-Degs/croc/releases/download/vX.Y.Z/croc-X.Y.Z.tgz
+npm install -g https://github.com/Joe-Degs/croc/releases/download/vX.Y.Z/croc-linux-x64.tar.gz
 ```
 
 Verify the install:

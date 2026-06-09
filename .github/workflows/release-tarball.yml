@@ -63,20 +63,26 @@ jobs:
       - name: Validate package contents
         run: npm run pack:check
 
-      - name: Pack tarball
-        id: pack
-        run: |
-          filename="$(npm pack --ignore-scripts --json | node -e "let input=''; process.stdin.on('data', c => input += c); process.stdin.on('end', () => console.log(JSON.parse(input)[0].filename));")"
-          echo "filename=${filename}" >> "${GITHUB_OUTPUT}"
+      - name: Build release assets
+        run: npm run release:assets
 
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          version="${RELEASE_TAG#v}"
+          assets=(
+            release-assets/croc-darwin-arm64.tar.gz
+            release-assets/croc-darwin-x64.tar.gz
+            release-assets/croc-linux-arm64.tar.gz
+            release-assets/croc-linux-x64.tar.gz
+          )
+
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-            gh release upload "${RELEASE_TAG}" "${{ steps.pack.outputs.filename }}" --clobber
+            gh release delete-asset "${RELEASE_TAG}" "croc-${version}.tgz" --yes 2>/dev/null || true
+            gh release upload "${RELEASE_TAG}" "${assets[@]}" --clobber
           else
-            gh release create "${RELEASE_TAG}" "${{ steps.pack.outputs.filename }}" \
+            gh release create "${RELEASE_TAG}" "${assets[@]}" \
               --title "${RELEASE_TAG}" \
               --notes "Croc ${RELEASE_TAG}"
           fi
