@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 
 const expectedPackageName = "croc";
@@ -34,6 +34,13 @@ if (manifest.name !== expectedPackageName) {
 
 for (const file of requiredFiles) {
 	if (!paths.includes(file)) failures.push(`missing required package file ${file}`);
+}
+
+try {
+	const cliVersion = execFileSync(process.execPath, ["dist/cli.js", "version"], { encoding: "utf8" }).trim();
+	if (cliVersion !== manifest.version) failures.push(`dist/cli.js reports version ${cliVersion}, expected ${manifest.version}`);
+} catch (error) {
+	failures.push(`failed to run dist/cli.js version: ${error.message}`);
 }
 
 const runNoteFiles = paths.filter((path) => path.startsWith("docs/runs/"));

@@ -24,7 +24,7 @@ croc dashboard status
 Croc release assets include prebuilt npm tarballs with `dist/`, so installs do not need `tsgo` or any build-time dependencies. Choose the asset for your platform:
 
 ```bash
-npm install -g https://github.com/Joe-Degs/croc/releases/download/v0.2.0/croc-linux-x64.tar.gz
+npm install -g https://github.com/Joe-Degs/croc/releases/download/v0.2.1/croc-linux-x64.tar.gz
 ```
 
 Available release assets:
