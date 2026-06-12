@@ -5328,6 +5328,9 @@ export async function executeOrchBatch(
 				lane,
 				durationMs,
 				tokens,
+				compactions: to.telemetry?.compactions,
+				compactionsStarted: to.telemetry?.compactionsStarted,
+				compactionsCompleted: to.telemetry?.compactionsCompleted,
 				exitReason: to.exitReason || null,
 			};
 		});

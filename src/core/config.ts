@@ -25,6 +25,37 @@ export interface CrocPiModelsConfig {
 	providers: Record<string, CrocPiProviderConfig>;
 }
 
+export type HeadroomProxyMode = "managed" | "external";
+export type HeadroomTelemetryMode = "off" | "on";
+export type HeadroomTarget = "openai" | "anthropic" | "gemini" | "cloudcode";
+export type HeadroomCcrMode = "disabled" | "bridge";
+
+export interface CrocHeadroomTargetConfig {
+	upstreamUrl: string;
+}
+
+export interface CrocHeadroomConfig {
+	enabled: boolean;
+	proxy: {
+		mode: HeadroomProxyMode;
+		command: string;
+		url: string;
+		telemetry: HeadroomTelemetryMode;
+		requireReady: boolean;
+		startupTimeoutSeconds: number;
+		targets: Partial<Record<HeadroomTarget, CrocHeadroomTargetConfig>>;
+	};
+	routing: {
+		providers: Record<string, { target: HeadroomTarget }>;
+	};
+	ccr: {
+		mode: HeadroomCcrMode;
+		timeoutSeconds: number;
+		maxResultBytes: number;
+		trustedOrigins: string[];
+	};
+}
+
 export interface CrocRuntimeConfig {
 	tmux: {
 		enabled: boolean;
@@ -157,6 +188,7 @@ export interface CrocBatteriesConfig {
 		enabled: boolean;
 		packageSource: string;
 	};
+	headroom: CrocHeadroomConfig;
 }
 
 export interface CrocConfig {
@@ -279,6 +311,27 @@ export function createDefaultConfig(cwd: string): CrocConfig {
 				enabled: false,
 				packageSource: "npm:pi-lens",
 			},
+			headroom: {
+				enabled: false,
+				proxy: {
+					mode: "managed",
+					command: "headroom",
+					url: "",
+					telemetry: "off",
+					requireReady: true,
+					startupTimeoutSeconds: 120,
+					targets: {},
+				},
+				routing: {
+					providers: {},
+				},
+				ccr: {
+					mode: "disabled",
+					timeoutSeconds: 10,
+					maxResultBytes: 65536,
+					trustedOrigins: [],
+				},
+			},
 		},
 	};
 }
@@ -308,12 +361,16 @@ export function hasConfiguredPiModels(config: Pick<CrocConfig, "pi">): boolean {
 
 export function getConfigPath(cwd: string, explicitPath?: string): string {
 	if (explicitPath) return resolve(explicitPath);
+	return findConfigPath(cwd) ?? join(resolve(cwd), "croc.yaml");
+}
+
+export function findConfigPath(cwd: string): string | undefined {
 	const root = resolve(cwd);
 	const matches = CONFIG_FILE_NAMES.map((name) => join(root, name)).filter((path) => existsSync(path));
 	if (matches.length > 1) {
 		throw new Error(`Multiple Croc config files found: ${matches.join(", ")}. Use --config to choose one.`);
 	}
-	return matches[0] ?? join(root, "croc.yaml");
+	return matches[0];
 }
 
 export function loadConfig(cwd: string, explicitPath?: string): LoadedConfig {

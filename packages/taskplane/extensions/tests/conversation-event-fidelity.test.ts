@@ -15,6 +15,7 @@ import { fileURLToPath } from "url";
 import { tmpdir } from "os";
 import { PassThrough } from "stream";
 import { EventEmitter } from "events";
+import { setTimeout as delay } from "timers/promises";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const agentHostSrc = readFileSync(join(__dirname, "..", "taskplane", "agent-host.ts"), "utf-8");
@@ -973,10 +974,211 @@ describe("5.x: Runtime behavioral emission (TP-111)", () => {
 		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "agent_end" }) + "\n");
 		lastSpawnedProc!.emit("close", 0, null);
 
-		await promise;
+		const result = await promise;
 
 		expect(events.filter((event) => event.type === "compaction_started").length).toBe(2);
 		expect(events.filter((event) => event.type === "retry_started").length).toBe(2);
 		expect(JSON.stringify(events.filter((event) => event.type === "retry_started"))).not.toContain("abcdefghijklmnopqrstuvwxyz");
+		expect(result.compactions).toBe(2);
+		expect((result as any).compactionsStarted).toBe(1);
+	});
+
+	it("5.12: preserves canonical compaction start/end details in events and exit summary", async () => {
+		const events: RuntimeAgentEvent[] = [];
+		const exitSummaryPath = join(fakeAppDataRoot, "events-exit.json");
+		const { promise } = spawnAgent(
+			{
+				agentId: "orch-test-lane-12-worker",
+				role: "worker",
+				batchId: "batch-tp111",
+				laneNumber: 12,
+				taskId: "TP-111",
+				repoId: "default",
+				cwd: process.cwd(),
+				prompt: "run",
+				mailboxDir: null,
+				stateRoot: null,
+				exitSummaryPath,
+			},
+			(evt) => events.push(evt),
+		);
+
+		expect(lastSpawnedProc).toBeDefined();
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "compaction_start", reason: "threshold" }) + "\n");
+		lastSpawnedProc!.stdout.write(JSON.stringify({
+			type: "compaction_end",
+			reason: "threshold",
+			aborted: false,
+			willRetry: false,
+			result: {
+				summary: "saved context",
+				firstKeptEntryId: "entry-2",
+				tokensBefore: 12345,
+			},
+		}) + "\n");
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "agent_end" }) + "\n");
+		lastSpawnedProc!.emit("close", 0, null);
+
+		const result = await promise;
+
+		const started = events.find((event) => event.type === "compaction_started");
+		const finished = events.find((event) => event.type === "compaction_finished");
+		expect(started?.payload).toEqual({ reason: "threshold" });
+		expect(finished?.payload).toEqual({
+			reason: "threshold",
+			status: "completed",
+			success: true,
+			aborted: false,
+			willRetry: false,
+			tokensBefore: 12345,
+		});
+		expect(JSON.stringify(finished?.payload)).not.toContain("[REDACTED:token]");
+		expect(result.compactions).toBe(1);
+		expect((result as any).compactionsStarted).toBe(1);
+		expect((result as any).compactionsCompleted).toBe(1);
+
+		const summary = JSON.parse(readFileSync(exitSummaryPath, "utf-8"));
+		expect(summary.compactions).toBe(1);
+		expect(summary.compactionsStarted).toBe(1);
+		expect(summary.compactionsCompleted).toBe(1);
+		expect(summary.compactionEvents).toEqual([
+			{ phase: "started", reason: "threshold" },
+			{
+				phase: "ended",
+				reason: "threshold",
+				status: "completed",
+				success: true,
+				aborted: false,
+				willRetry: false,
+				tokensBefore: 12345,
+			},
+		]);
+	});
+
+	it("5.13: treats result-less compaction end as skipped", async () => {
+		const events: RuntimeAgentEvent[] = [];
+		const exitSummaryPath = join(fakeAppDataRoot, "events-skipped-compaction-exit.json");
+		const { promise } = spawnAgent(
+			{
+				agentId: "orch-test-lane-13-worker",
+				role: "worker",
+				batchId: "batch-tp111",
+				laneNumber: 13,
+				taskId: "TP-111",
+				repoId: "default",
+				cwd: process.cwd(),
+				prompt: "run",
+				mailboxDir: null,
+				stateRoot: null,
+				exitSummaryPath,
+			},
+			(evt) => events.push(evt),
+		);
+
+		expect(lastSpawnedProc).toBeDefined();
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "compaction_start", reason: "no_model" }) + "\n");
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "compaction_end", reason: "no_model" }) + "\n");
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "agent_end" }) + "\n");
+		lastSpawnedProc!.emit("close", 0, null);
+
+		const result = await promise;
+
+		const finished = events.find((event) => event.type === "compaction_finished");
+		expect(finished?.payload).toEqual({
+			reason: "no_model",
+			status: "skipped",
+			success: false,
+			aborted: false,
+			willRetry: false,
+		});
+		expect((result as any).compactionsCompleted).toBe(0);
+
+		const summary = JSON.parse(readFileSync(exitSummaryPath, "utf-8"));
+		expect(summary.compactionsCompleted).toBe(0);
+		expect(summary.compactionEvents).toEqual([
+			{ phase: "started", reason: "no_model" },
+			{
+				phase: "ended",
+				reason: "no_model",
+				status: "skipped",
+				success: false,
+				aborted: false,
+				willRetry: false,
+			},
+		]);
+	});
+
+	it("5.14: defers stdin close while Pi compaction is active", async () => {
+		const events: RuntimeAgentEvent[] = [];
+		const { promise } = spawnAgent(
+			{
+				agentId: "orch-test-lane-13-worker",
+				role: "worker",
+				batchId: "batch-tp111",
+				laneNumber: 13,
+				taskId: "TP-111",
+				repoId: "default",
+				cwd: process.cwd(),
+				prompt: "run",
+				mailboxDir: null,
+				stateRoot: null,
+				closeDelayMs: 30,
+			},
+			(evt) => events.push(evt),
+		);
+
+		expect(lastSpawnedProc).toBeDefined();
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "agent_end" }) + "\n");
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "compaction_start", reason: "threshold" }) + "\n");
+		await delay(75);
+
+		expect(lastSpawnedProc!.stdin.destroyed).toBe(false);
+		expect(events.some((event) => event.type === "compaction_started")).toBe(true);
+
+		lastSpawnedProc!.stdout.write(JSON.stringify({
+			type: "compaction_end",
+			reason: "threshold",
+			aborted: false,
+			willRetry: false,
+			result: {
+				summary: "saved context",
+				firstKeptEntryId: "entry-2",
+				tokensBefore: 12345,
+			},
+		}) + "\n");
+		await delay(75);
+
+		expect(lastSpawnedProc!.stdin.destroyed).toBe(true);
+		lastSpawnedProc!.emit("close", 0, null);
+		await promise;
+	});
+
+	it("5.15: legacy auto compaction start does not defer stdin close", async () => {
+		const { promise } = spawnAgent(
+			{
+				agentId: "orch-test-lane-15-worker",
+				role: "worker",
+				batchId: "batch-tp111",
+				laneNumber: 15,
+				taskId: "TP-111",
+				repoId: "default",
+				cwd: process.cwd(),
+				prompt: "run",
+				mailboxDir: null,
+				stateRoot: null,
+				closeDelayMs: 30,
+			},
+			() => {},
+		);
+
+		expect(lastSpawnedProc).toBeDefined();
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "agent_end" }) + "\n");
+		lastSpawnedProc!.stdout.write(JSON.stringify({ type: "auto_compaction_start", reason: "legacy" }) + "\n");
+		await delay(75);
+
+		expect(lastSpawnedProc!.stdin.destroyed).toBe(true);
+
+		lastSpawnedProc!.emit("close", 0, null);
+		await promise;
 	});
 });

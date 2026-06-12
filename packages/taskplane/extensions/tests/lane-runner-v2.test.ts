@@ -60,6 +60,15 @@ describe("1.x: Lane-runner module structure", () => {
 		expect(laneRunnerSrc).toContain("writeLaneSnapshot(");
 	});
 
+	it("1.8: propagates compaction counters to outcomes and snapshots", () => {
+		expect(laneRunnerSrc).toContain("compactions: finalTelemetry?.compactions");
+		expect(laneRunnerSrc).toContain("compactionsStarted: finalTelemetry?.compactionsStarted");
+		expect(laneRunnerSrc).toContain("compactionsCompleted: finalTelemetry?.compactionsCompleted");
+		expect(laneRunnerSrc).toContain("compactions: telemetry.compactions");
+		expect(laneRunnerSrc).toContain("compactionsStarted: telemetry.compactionsStarted");
+		expect(laneRunnerSrc).toContain("compactionsCompleted: telemetry.compactionsCompleted");
+	});
+
 	it("1.7: no Pi extension imports", () => {
 		expect(laneRunnerSrc).not.toContain("ExtensionAPI");
 		expect(laneRunnerSrc).not.toContain("ExtensionContext");
@@ -216,6 +225,22 @@ describe("3.x: executeLaneV2 integration in execution.ts", () => {
 		expect(importBlock).toContain("formatPreflightSweep");
 		expect(importBlock).toContain("rotateSupervisorLogs");
 		expect(importBlock).toContain("formatLogRotation");
+	});
+
+	it("3.11: batch history persists optional compaction counters from outcome telemetry", () => {
+		const engineSrc = readFileSync(join(__dirname, "..", "taskplane", "engine.ts"), "utf-8");
+
+		expect(engineSrc).toContain("compactions: to.telemetry?.compactions");
+		expect(engineSrc).toContain("compactionsStarted: to.telemetry?.compactionsStarted");
+		expect(engineSrc).toContain("compactionsCompleted: to.telemetry?.compactionsCompleted");
+	});
+
+	it("3.12: merge snapshots propagate compaction counters", () => {
+		const mergeSrc = readFileSync(join(__dirname, "..", "taskplane", "merge.ts"), "utf-8");
+
+		expect(mergeSrc).toContain("compactions: tel.compactions");
+		expect(mergeSrc).toContain("compactionsStarted: tel.compactionsStarted");
+		expect(mergeSrc).toContain("compactionsCompleted: tel.compactionsCompleted");
 	});
 });
 

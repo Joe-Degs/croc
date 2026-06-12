@@ -3,6 +3,7 @@ import { dirname, extname, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { parse as parseYaml } from "yaml";
 import type { CrocConfig } from "./config.ts";
+import { deriveHeadroomProviderBaseUrl, isHeadroomEnabled, validateHeadroomConfig } from "./headroom.ts";
 
 export type PiProviderConfig = Parameters<ExtensionAPI["registerProvider"]>[1];
 
@@ -39,6 +40,47 @@ function readModelsFileProviders(configPath: string, modelsFile: string): Map<st
 	return providers;
 }
 
+function normalizeTrailingSlashes(value: string): string {
+	return value.replace(/\/+$/, "");
+}
+
+function assertCompatibleHeadroomBaseUrl(
+	providerName: string,
+	provider: Record<string, unknown>,
+	baseUrl: string,
+): void {
+	if (provider.baseUrl === undefined) return;
+	if (typeof provider.baseUrl !== "string") {
+		throw new Error(`pi.models.providers.${providerName}.baseUrl must be a string when routed through Headroom.`);
+	}
+	if (normalizeTrailingSlashes(provider.baseUrl) === normalizeTrailingSlashes(baseUrl)) return;
+	throw new Error(
+		`Croc owns the Headroom route for provider "${providerName}", but pi.models.providers.${providerName}.baseUrl conflicts with the derived Headroom URL.`,
+	);
+}
+
+function applyHeadroomProviderRouting(
+	config: CrocConfig,
+	providers: Map<string, PiProviderConfig>,
+): Map<string, PiProviderConfig> {
+	if (!isHeadroomEnabled(config)) return providers;
+
+	validateHeadroomConfig(config);
+	const routedProviders = new Map(providers);
+	for (const [providerName, route] of Object.entries(config.batteries.headroom.routing.providers)) {
+		const baseUrl = deriveHeadroomProviderBaseUrl(config, route.target);
+		const provider = routedProviders.get(providerName);
+		if (provider === undefined) {
+			routedProviders.set(providerName, { baseUrl } as PiProviderConfig);
+			continue;
+		}
+		if (!isRecord(provider)) throw new Error(`pi.models.providers.${providerName} must be an object.`);
+		assertCompatibleHeadroomBaseUrl(providerName, provider, baseUrl);
+		routedProviders.set(providerName, { ...provider, baseUrl } as PiProviderConfig);
+	}
+	return routedProviders;
+}
+
 export function getConfiguredPiProviders(
 	config: CrocConfig,
 	configPath: string | undefined,
@@ -53,7 +95,7 @@ export function getConfiguredPiProviders(
 		if (!isRecord(provider)) throw new Error(`pi.models.providers.${name} must be an object.`);
 		providers.set(name, provider as PiProviderConfig);
 	}
-	return providers;
+	return applyHeadroomProviderRouting(config, providers);
 }
 
 export function validatePiModelsConfig(config: CrocConfig, configPath: string): void {

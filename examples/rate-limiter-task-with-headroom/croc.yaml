@@ -1,0 +1,136 @@
+# yaml-language-server: $schema=../../schemas/croc.schema.json
+configVersion: 1
+profile: rate-limiter-task-with-headroom
+
+runtime:
+  tmux:
+    # A stable session name makes `croc attach` predictable while trying examples.
+    session: croc-rate-limiter-headroom
+
+pi:
+  model: example-llm/example-chat
+  thinking: high
+  models:
+    providers:
+      example-llm:
+        name: Example LLM
+        # Do not set baseUrl here. The Headroom route below owns it and rewrites
+        # this provider to http://127.0.0.1:18787/v1 at apply/start time.
+        api: openai-responses
+        apiKey: "$EXAMPLE_LLM_API_KEY"
+        authHeader: true
+        models:
+          - id: example-chat
+            name: Example Chat
+            reasoning: false
+            input:
+              - text
+            contextWindow: 128000
+            maxTokens: 8192
+            cost:
+              input: 0
+              output: 0
+              cacheRead: 0
+              cacheWrite: 0
+
+workspace:
+  enabled: true
+  defaultRepo: app
+  repos:
+    - id: app
+      mode: create
+      path: repos/app
+
+taskplane:
+  projectName: rate-limiter-task-with-headroom
+  projectDescription: Redis rate limiter task packets routed through Headroom.
+  workerModel: example-llm/example-chat
+  reviewerModel: example-llm/example-chat
+  mergeModel: example-llm/example-chat
+  supervisorModel: example-llm/example-chat
+  workerThinking: high
+  reviewerThinking: high
+  mergeThinking: high
+
+batteries:
+  headroom:
+    enabled: true
+    proxy:
+      # Managed mode is the default. Croc will start `headroom proxy`, wait for
+      # /readyz, then launch the dashboard and Pi when you run `croc start all`.
+      url: http://127.0.0.1:18787
+      targets:
+        openai:
+          # Replace this with the upstream provider URL you would use without Headroom.
+          upstreamUrl: https://llm.example.invalid/v1
+    routing:
+      providers:
+        # This rewrites the Pi provider baseUrl to the local Headroom proxy.
+        example-llm:
+          target: openai
+    ccr:
+      # Registers the Pi-side `headroom_retrieve` bridge for compressed content.
+      # Local proxy origins are trusted by default.
+      mode: bridge
+
+work:
+  enabled: true
+  context: |
+    # Rate limiter task context
+
+    Build a small Python library and FastAPI middleware for Redis-backed rate limiting.
+    Keep the implementation simple, typed, and covered by contract tests.
+  tasks:
+    - id: TASK-001
+      title: Build Redis rate limiter
+      repo: app
+      size: M
+      prompt: |
+        Build a Python Redis-backed sliding-window rate limiter and FastAPI middleware.
+
+        The generated repo starts empty except for Croc's seed commit. Create the minimal project structure needed for tests and local development.
+
+        ### Step 0: Preflight
+
+        - [ ] Check git status and inspect the repo
+        - [ ] Create or reuse `.venv`
+        - [ ] Add `.gitignore` entries for `.venv/`, `.pytest_cache/`, `__pycache__/`, `*.pyc`, and `*.egg-info/`
+
+        ### Step 1: Package scaffold
+
+        - [ ] Create `pyproject.toml` for Python 3.11+
+        - [ ] Include runtime dependencies for `redis` and `fastapi`
+        - [ ] Include test dependencies for `pytest`, `httpx`, and a Redis-compatible test backend
+        - [ ] Explicitly list packaged runtime modules so top-level tests are not packaged
+
+        ### Step 2: Rate limiter
+
+        - [ ] Create `rate_limiter.py`
+        - [ ] Implement `RateLimiter(redis_client, key_prefix="ratelimit:", window_seconds=60.0, max_requests=10)`
+        - [ ] Implement `allow(identifier: str) -> bool`
+        - [ ] Implement `remaining(identifier: str) -> int`
+        - [ ] Implement `reset_at(identifier: str) -> float | None`
+        - [ ] Use Redis sorted sets and an atomic Lua path when available
+        - [ ] Fail open on Redis connection and timeout errors without running fallback writes
+
+        ### Step 3: Middleware
+
+        - [ ] Create `ratelimit_middleware.py`
+        - [ ] Implement FastAPI middleware that rate-limits by client IP
+        - [ ] Honor `X-Forwarded-For` by using the first IP address
+        - [ ] Exclude `/health` and `/metrics`
+        - [ ] Return `429` before calling the endpoint when the limit is exceeded
+        - [ ] Add `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers where applicable
+
+        ### Step 4: Tests
+
+        - [ ] Add tests for allowed requests, exceeded limits, remaining counts, reset time, and expired windows
+        - [ ] Add tests for Redis fail-open behavior
+        - [ ] Add middleware tests for successful requests, blocked requests, excluded paths, and forwarded IP behavior
+        - [ ] Run `.venv/bin/python -m pip install -e .`
+        - [ ] Run `.venv/bin/python -m pytest`
+
+        ### Step 5: Handoff
+
+        - [ ] Commit the implementation if all tests pass
+        - [ ] Update `STATUS.md` with the test command and result

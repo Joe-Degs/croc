@@ -63,9 +63,14 @@ export function buildPiArgs(config: CrocConfig, target?: string): string[] {
 	if (config.pi.thinking) args.push("--thinking", config.pi.thinking);
 	if (config.pi.name) args.push("--name", config.pi.name);
 	args.push(...config.pi.extraArgs);
-	const orchTarget = resolveOrchTarget(config, target);
-	if (orchTarget) args.push(`/orch ${orchTarget}`);
+	const orchCommand = buildOrchCommand(config, target);
+	if (orchCommand) args.push(orchCommand);
 	return args;
+}
+
+export function buildOrchCommand(config: CrocConfig, target?: string): string | undefined {
+	const orchTarget = resolveOrchTarget(config, target);
+	return orchTarget ? `/orch ${orchTarget}` : undefined;
 }
 
 function tmuxSessionExists(session: string): boolean {
@@ -143,7 +148,8 @@ function hasActiveBatch(cwd: string): BatchStateSummary | undefined {
 }
 
 function dispatchTargetToTmux(session: string, target: string, config: CrocConfig, cwd: string): void {
-	const command = `/orch ${target}`;
+	const command = buildOrchCommand(config, target);
+	if (!command) return;
 	const pane = resolveCrocTmuxPane(session, config.pi.name, cwd);
 	const result = spawnProcessSync("tmux", ["send-keys", "-t", pane.paneId, command, "C-m"], {
 		encoding: "utf-8",

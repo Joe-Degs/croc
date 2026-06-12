@@ -809,7 +809,8 @@ function loadTelemetryData(batchState) {
         inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
         cacheWriteTokens: 0, cost: 0, toolCalls: 0,
         lastTool: "", currentTool: "", retries: 0, retryActive: false,
-        lastRetryError: "", compactions: 0, latestTotalTokens: 0,
+        lastRetryError: "", compactions: 0, compactionsStarted: 0,
+        compactionsCompleted: 0, compactionActive: 0, latestTotalTokens: 0,
         contextPct: 0, startedAt: 0,
       };
       telemetryAccumulators.set(prefix, fresh);
@@ -833,7 +834,8 @@ function loadTelemetryData(batchState) {
       acc.inputTokens = 0; acc.outputTokens = 0; acc.cacheReadTokens = 0;
       acc.cacheWriteTokens = 0; acc.cost = 0; acc.toolCalls = 0;
       acc.lastTool = ""; acc.currentTool = ""; acc.retries = 0; acc.retryActive = false;
-      acc.lastRetryError = ""; acc.compactions = 0; acc.latestTotalTokens = 0;
+      acc.lastRetryError = ""; acc.compactions = 0; acc.compactionsStarted = 0;
+      acc.compactionsCompleted = 0; acc.compactionActive = 0; acc.latestTotalTokens = 0;
       acc.contextPct = 0; acc.startedAt = 0;
       ts.wasReset = false;
     }
@@ -919,6 +921,20 @@ function loadTelemetryData(batchState) {
         }
         case "auto_compaction_start": {
           acc.compactions++;
+          break;
+        }
+        case "compaction_started": {
+          acc.compactions++;
+          acc.compactionsStarted++;
+          acc.compactionActive++;
+          break;
+        }
+        case "compaction_finished": {
+          const payload = event.payload && typeof event.payload === "object" ? event.payload : event;
+          acc.compactionActive = Math.max(0, (acc.compactionActive || 0) - 1);
+          if (payload.success !== false && payload.aborted !== true) {
+            acc.compactionsCompleted++;
+          }
           break;
         }
       }
@@ -1215,6 +1231,9 @@ function synthesizeLaneStateFromSnapshot(key, snap, fallbackBatchId) {
     workerCacheReadTokens: w.cacheReadTokens || 0,
     workerCacheWriteTokens: w.cacheWriteTokens || 0,
     workerCostUsd: w.costUsd || 0,
+    workerCompactions: w.compactions || 0,
+    workerCompactionsStarted: w.compactionsStarted || 0,
+    workerCompactionsCompleted: w.compactionsCompleted || 0,
     reviewerStatus: r ? (reviewerStatusMap[r.status] || r.status || "running") : "idle",
     reviewerElapsed: r?.elapsedMs || 0,
     reviewerContextPct: r?.contextPct || 0,
@@ -1318,7 +1337,10 @@ function buildDashboardState() {
         retries: 0,
         retryActive: false,
         lastRetryError: "",
-        compactions: 0,
+        compactions: agent.compactions || 0,
+        compactionsStarted: agent.compactionsStarted || 0,
+        compactionsCompleted: agent.compactionsCompleted || 0,
+        compactionActive: snap.status === "running" ? Math.max(0, (agent.compactionsStarted || 0) - (agent.compactionsCompleted || 0)) : 0,
         latestTotalTokens: (agent.inputTokens || 0) + (agent.outputTokens || 0),
         _updatedAt: snap.updatedAt,
         _source: "merge-snapshot",
@@ -1338,6 +1360,21 @@ function buildDashboardState() {
       const key = laneRec ? (laneRec.laneSessionId) : `lane-${laneNum}`;
       if (!laneStates[key] || (snap.updatedAt && snap.updatedAt > (laneStates[key].timestamp || 0))) {
         laneStates[key] = synthesizeLaneStateFromSnapshot(key, snap, state.batchId);
+      }
+      const worker = snap.worker || {};
+      const reviewer = snap.reviewer || {};
+      const started = (worker.compactionsStarted || 0) + (reviewer.compactionsStarted || 0);
+      const completed = (worker.compactionsCompleted || 0) + (reviewer.compactionsCompleted || 0);
+      const compactions = (worker.compactions || 0) + (reviewer.compactions || 0);
+      if (started > 0 || completed > 0 || compactions > 0) {
+        const existing = telemetry[key] || {};
+        telemetry[key] = {
+          ...existing,
+          compactions: existing.compactions || compactions,
+          compactionsStarted: existing.compactionsStarted || started,
+          compactionsCompleted: existing.compactionsCompleted || completed,
+          compactionActive: existing.compactionActive || (snap.status === "running" ? Math.max(0, started - completed) : 0),
+        };
       }
     }
   }

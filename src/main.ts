@@ -4,8 +4,10 @@ import { applyConfig } from "./core/apply.ts";
 import { APP_NAME, hasConfiguredPiModels, loadConfig, VERSION, writeDefaultConfig } from "./core/config.ts";
 import { getDashboardState, getDashboardUrl, startDashboard, stopDashboard } from "./core/dashboard.ts";
 import { runDoctor } from "./core/doctor.ts";
+import { ensureHeadroomReady, type HeadroomEnsureResult, isHeadroomEnabled } from "./core/headroom.ts";
 import { redactSecrets } from "./core/redaction.ts";
 import { attachTmux, startPi } from "./core/runtime.ts";
+import { resolveTaskplaneCliCwd, runTaskplaneCli } from "./core/taskplane-cli.ts";
 import { resolveRuntimeContext } from "./core/workspace.ts";
 
 function printDiagnostics(diagnostics: Array<{ type: "warning" | "error"; message: string }>): void {
@@ -46,7 +48,12 @@ function printWorkspaceResult(result: { runtimeRoot: string; workspaceFiles: str
 	if (result.createdRepos.length > 0) console.log(`Prepared ${result.createdRepos.length} workspace repo(s)`);
 }
 
-async function run(rawArgs: string[]): Promise<void> {
+function printHeadroomReady(result: HeadroomEnsureResult): void {
+	const pid = result.pid === undefined ? "" : `, pid ${result.pid}`;
+	console.log(`Headroom ready: ${result.url} (${result.mode}${pid})`);
+}
+
+export async function run(rawArgs: string[]): Promise<void> {
 	const args = parseArgs(rawArgs);
 	if (args.diagnostics.length > 0) {
 		printDiagnostics(args.diagnostics);
@@ -65,6 +72,14 @@ async function run(rawArgs: string[]): Promise<void> {
 	if (args.command === "init") {
 		const path = writeDefaultConfig(args.cwd, args.configPath, args.force);
 		console.log(`Wrote ${path}`);
+		return;
+	}
+
+	if (args.command === "taskplane") {
+		const cwd = resolveTaskplaneCliCwd(args.cwd, args.configPath);
+		const result = runTaskplaneCli(cwd, args.taskplaneArgs ?? [args.taskplaneAction ?? "status"]);
+		if (result.stderr) console.error(result.stderr);
+		if (result.stdout) console.log(result.stdout);
 		return;
 	}
 
@@ -123,6 +138,9 @@ async function run(rawArgs: string[]): Promise<void> {
 	if (args.command === "start") {
 		const result = applyConfig(args.cwd, config, loaded.path);
 		const runtime = resolveRuntimeContext(args.cwd, config);
+		if (isHeadroomEnabled(runtime.config)) {
+			printHeadroomReady(await ensureHeadroomReady(result.runtimeRoot, runtime.config));
+		}
 		if (runtime.config.taskplane.dashboard.enabled) {
 			try {
 				startDashboard(result.runtimeRoot, runtime.config, loaded.path);

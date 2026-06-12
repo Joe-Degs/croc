@@ -118,13 +118,27 @@ Croc reads `croc.yaml`, `croc.yml`, or `croc.json` from the current project unle
 
 See [`docs/config.md`](docs/config.md) for the config reference and [`schemas/croc.schema.json`](schemas/croc.schema.json) for editor validation.
 
+Maintainer release steps live in [`docs/release.md`](docs/release.md).
+
 Web search is conditional. Set `batteries.webSearch.enabled` and provide a SearXNG URL before applying.
 
 Skills are enabled by default. Croc registers the bundled `croc-workflow` skill for direct Pi sessions and writes required-skill references into generated Taskplane prompts.
 
 ## Examples
 
-See [`examples/`](examples/) for runnable config shapes, including repo-local mode, workspace repo creation, inline skills, clone/attach workspaces, and web search.
+See [`examples/`](examples/) for copy/adapt config shapes, including repo-local mode, workspace repo creation, inline skills, clone/attach workspaces, web search, model providers, and Headroom-routed Taskplane work.
+
+Example flow:
+
+```bash
+EXAMPLE=examples/workspace-create/croc.yaml
+croc apply --config "$EXAMPLE"
+croc doctor --config "$EXAMPLE"
+croc start all --config "$EXAMPLE"
+croc taskplane status --config "$EXAMPLE"
+```
+
+Use [`examples/rate-limiter-task-with-headroom/`](examples/rate-limiter-task-with-headroom/) to see a generated Redis rate limiter task packet routed through a managed Headroom proxy. Replace placeholder providers, upstream URLs, and environment variables before running an example locally.
 
 ## Workspaces
 

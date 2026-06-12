@@ -562,7 +562,16 @@ function telemetryBadgesHtml(tel, suppressRetry) {
   } else if (tel.retries > 0 && !suppressRetry) {
     badges += `<span class="telem-badge telem-retry" title="${tel.retries} auto-retry event(s)">🔄 ${tel.retries}</span>`;
   }
-  if (tel.compactions > 0) {
+  const compactionsStarted = Number.isFinite(tel.compactionsStarted) ? tel.compactionsStarted : null;
+  const compactionsCompleted = Number.isFinite(tel.compactionsCompleted) ? tel.compactionsCompleted : null;
+  const hasLifecycleCompaction = (compactionsStarted || 0) > 0 || (compactionsCompleted || 0) > 0;
+  if (hasLifecycleCompaction) {
+    const started = compactionsStarted || 0;
+    const completed = compactionsCompleted || 0;
+    const active = Number.isFinite(tel.compactionActive) ? tel.compactionActive : Math.max(0, started - completed);
+    const label = active > 0 ? `${active} active` : `${started}/${completed}`;
+    badges += `<span class="telem-badge telem-compaction" title="${started} compaction(s) started, ${completed} completed${active > 0 ? `, ${active} active` : ""}">🗜 ${label}</span>`;
+  } else if (tel.compactions > 0) {
     badges += `<span class="telem-badge telem-compaction" title="${tel.compactions} context compaction(s)">🗜 ${tel.compactions}</span>`;
   }
   return badges;
@@ -3549,7 +3558,10 @@ function renderStatusFeedEvent(evt) {
 		return createTranscriptNote({ ...evt, payload: { ...payload, isError: state === 'failed', success: state === 'succeeded' } }, ['retry finished', attempt ? `${attempt} ${state}` : state, preview].filter(Boolean).join(': ').replace(': attempt', ', attempt'));
 	}
 	if (type === 'compaction_started') return createTranscriptNote(evt, ['compaction started', preview].filter(Boolean).join(': '));
-	if (type === 'compaction_finished') return createTranscriptNote({ ...evt, payload: { ...payload, isError: payload.success === false || payload.isError === true } }, [payload.success === false || payload.isError === true ? 'compaction failed' : 'compaction finished', preview].filter(Boolean).join(': '));
+	if (type === 'compaction_finished') {
+		const state = payload.status === 'skipped' ? 'skipped' : payload.success === false || payload.isError === true ? 'failed' : 'finished';
+		return createTranscriptNote({ ...evt, payload: { ...payload, isError: state === 'failed' } }, [`compaction ${state}`, preview].filter(Boolean).join(': '));
+	}
 	if (type === 'message_delivered') {
 		const label = payload.broadcast || payload.isBroadcast ? 'mailbox broadcast delivered' : payload.target || payload.to ? 'direct message delivered' : 'message delivered';
 		return createTranscriptNote(evt, [label, preview].filter(Boolean).join(': '));

@@ -535,6 +535,90 @@
 						"enabled": { "type": "boolean" },
 						"packageSource": { "type": "string", "minLength": 1 }
 					}
+				},
+				"headroom": {
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"enabled": { "type": "boolean" },
+						"proxy": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"mode": { "type": "string", "enum": ["managed", "external"] },
+								"command": { "type": "string", "minLength": 1 },
+								"url": { "type": "string" },
+								"telemetry": { "type": "string", "enum": ["off", "on"] },
+								"requireReady": { "type": "boolean" },
+								"startupTimeoutSeconds": { "type": "number", "minimum": 1 },
+								"targets": {
+									"type": "object",
+									"additionalProperties": false,
+									"properties": {
+										"openai": {
+											"type": "object",
+											"additionalProperties": false,
+											"required": ["upstreamUrl"],
+											"properties": {
+												"upstreamUrl": { "type": "string" }
+											}
+										},
+										"anthropic": {
+											"type": "object",
+											"additionalProperties": false,
+											"required": ["upstreamUrl"],
+											"properties": {
+												"upstreamUrl": { "type": "string" }
+											}
+										},
+										"gemini": {
+											"type": "object",
+											"additionalProperties": false,
+											"required": ["upstreamUrl"],
+											"properties": {
+												"upstreamUrl": { "type": "string" }
+											}
+										},
+										"cloudcode": {
+											"type": "object",
+											"additionalProperties": false,
+											"required": ["upstreamUrl"],
+											"properties": {
+												"upstreamUrl": { "type": "string" }
+											}
+										}
+									}
+								}
+							}
+						},
+						"routing": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"providers": {
+									"type": "object",
+									"additionalProperties": {
+										"type": "object",
+										"additionalProperties": false,
+										"required": ["target"],
+										"properties": {
+											"target": { "type": "string", "enum": ["openai", "anthropic", "gemini", "cloudcode"] }
+										}
+									}
+								}
+							}
+						},
+						"ccr": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"mode": { "type": "string", "enum": ["disabled", "bridge"] },
+								"timeoutSeconds": { "type": "number", "minimum": 1 },
+								"maxResultBytes": { "type": "number", "minimum": 1 },
+								"trustedOrigins": { "type": "array", "items": { "type": "string" } }
+							}
+						}
+					}
 				}
 			}
 		}

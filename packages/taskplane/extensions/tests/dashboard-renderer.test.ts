@@ -7,6 +7,7 @@ import { expect } from "./expect.ts";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_JS = resolve(__dirname, "../../dashboard/public/app.js");
 const STYLE_CSS = resolve(__dirname, "../../dashboard/public/style.css");
+const SERVER_CJS = resolve(__dirname, "../../dashboard/server.cjs");
 
 function escapeText(value: string): string {
 	return value.replace(
@@ -255,6 +256,10 @@ interface AgentsPanelRuntime {
 	body: FakeElement;
 }
 
+interface TelemetryBadgeRuntime {
+	telemetryBadgesHtml: (telemetry: Record<string, unknown> | null, suppressRetry?: boolean) => string;
+}
+
 function loadHelpers(): RendererHelpers {
 	const src = readFileSync(APP_JS, "utf8");
 	const start = src.indexOf("const ANSI_FG_CLASSES");
@@ -322,6 +327,14 @@ function loadWorkerFeedRuntime(): RendererHelpers {
 			"return { stripUnsupportedAnsiControls, createOutputBlock, createTruncationBadge, appendOutputText, replaceOutputText, renderConvEvent: null, renderV2Event, renderV2AgentEvents, applyV2AgentEventsPollResponse, resetV2FeedState, buildAgentEventsEndpoint, getV2State, getV2FeedGeneration, getMaxWorkerFeedItems, setV2Cursor, terminalBody: $terminalBody };",
 		].join("\n"),
 	)(fakeDocument, TextEncoder, terminalBody, (fn: () => void) => fn()) as RendererHelpers;
+}
+
+function loadTelemetryBadgeRuntime(): TelemetryBadgeRuntime {
+	const src = readFileSync(APP_JS, "utf8");
+	const helperStart = src.indexOf("function escapeHtml");
+	const helperEnd = src.indexOf("// ─── Copy to Clipboard", helperStart);
+	if (helperStart < 0 || helperEnd < 0) throw new Error("telemetry badge helper block not found");
+	return new Function(`${src.slice(helperStart, helperEnd)}\nreturn { telemetryBadgesHtml };`)() as TelemetryBadgeRuntime;
 }
 
 function datasetValues(root: FakeElement): string {
@@ -406,6 +419,50 @@ function loadMessagesRuntime(): RendererHelpers {
 }
 
 describe("dashboard safe output renderer", () => {
+	it("renders new and legacy compaction telemetry badges", () => {
+		const helpers = loadTelemetryBadgeRuntime();
+
+		const activeHtml = helpers.telemetryBadgesHtml({ compactionsStarted: 2, compactionsCompleted: 1 });
+		expect(activeHtml).toContain("2 compaction(s) started, 1 completed, 1 active");
+		expect(activeHtml).toContain("🗜 1 active");
+
+		const completeHtml = helpers.telemetryBadgesHtml({ compactionsStarted: 1, compactionsCompleted: 1 });
+		expect(completeHtml).toContain("🗜 1/1");
+
+		const legacyHtml = helpers.telemetryBadgesHtml({ compactions: 1 });
+		expect(legacyHtml).toContain("1 context compaction(s)");
+		expect(legacyHtml).toContain("🗜 1");
+
+		const legacyWithZeroLifecycleHtml = helpers.telemetryBadgesHtml({
+			compactions: 1,
+			compactionsStarted: 0,
+			compactionsCompleted: 0,
+			compactionActive: 0,
+		});
+		expect(legacyWithZeroLifecycleHtml).toContain("1 context compaction(s)");
+		expect(legacyWithZeroLifecycleHtml).not.toContain("0/0");
+
+		const emptyHtml = helpers.telemetryBadgesHtml({
+			compactions: 0,
+			compactionsStarted: 0,
+			compactionsCompleted: 0,
+			compactionActive: 0,
+		});
+		expect(emptyHtml).not.toContain("telem-compaction");
+	});
+
+	it("maps compaction counters to frontend telemetry without raw payloads", () => {
+		const serverSrc = readFileSync(SERVER_CJS, "utf8");
+
+		expect(serverSrc).toContain('case "compaction_started"');
+		expect(serverSrc).toContain('case "compaction_finished"');
+		expect(serverSrc).toContain('case "auto_compaction_start": {');
+		expect(serverSrc).not.toContain('case "auto_compaction_start":\n        case "compaction_started"');
+		expect(serverSrc).toContain("compactionsStarted: agent.compactionsStarted || 0");
+		expect(serverSrc).toContain("compactionsCompleted: agent.compactionsCompleted || 0");
+		expect(serverSrc).not.toContain("compactionEvents");
+	});
+
 	it("converts red ANSI text into a scoped span", () => {
 		const helpers = loadHelpers();
 		const block = helpers.createOutputBlock({ output: "plain \x1b[31mred\x1b[0m done" });
@@ -1551,7 +1608,7 @@ describe("dashboard safe output renderer", () => {
 		const helpers = loadWorkerFeedRuntime();
 		const longPreview = "x".repeat(260);
 
-		helpers.renderV2AgentEvents([
+			helpers.renderV2AgentEvents([
 			{ type: "agent_exited", payload: { durationMs: 125000 } },
 			{ type: "agent_crashed", payload: { exitCode: 2, error: "panic <bad>" } },
 			{ type: "agent_killed", payload: { reason: "operator stop" } },
@@ -1559,6 +1616,7 @@ describe("dashboard safe output renderer", () => {
 			{ type: "retry_started", payload: { attempt: 2, maxAttempts: 3, error: longPreview } },
 			{ type: "compaction_started", payload: {} },
 			{ type: "compaction_finished", payload: { success: true, summary: "saved context" } },
+			{ type: "compaction_finished", payload: { status: "skipped", success: false } },
 			{ type: "message_delivered", payload: { broadcast: true, content: "broadcast body" } },
 			{ type: "message_delivered", payload: { to: "lane-1", content: "direct body" } },
 			{ type: "escalation_sent", payload: { content: "needs supervisor" } },
@@ -1578,6 +1636,7 @@ describe("dashboard safe output renderer", () => {
 		expect(text).not.toContain("x".repeat(241));
 		expect(text).toContain("compaction started");
 		expect(text).toContain("compaction finished: saved context");
+		expect(text).toContain("compaction skipped");
 		expect(text).toContain("mailbox broadcast delivered: broadcast body");
 		expect(text).toContain("direct message delivered: direct body");
 		expect(text).toContain("escalation sent: needs supervisor");

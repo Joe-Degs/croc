@@ -884,6 +884,9 @@ export async function spawnMergeAgentV2(
 		outputTokens: tel.outputTokens ?? 0,
 		cacheReadTokens: tel.cacheReadTokens ?? 0,
 		cacheWriteTokens: tel.cacheWriteTokens ?? 0,
+		compactions: tel.compactions,
+		compactionsStarted: tel.compactionsStarted,
+		compactionsCompleted: tel.compactionsCompleted,
 	});
 
 	// Telemetry callback: write a merge snapshot on every telemetry update.

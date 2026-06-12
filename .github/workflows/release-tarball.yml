@@ -68,6 +68,28 @@ jobs:
       - name: Build release assets
         run: npm run release:assets
 
+      - name: Extract release notes
+        run: |
+          version="${RELEASE_TAG#v}"
+          VERSION="${version}" node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const version = process.env.VERSION;
+          const changelog = readFileSync("CHANGELOG.md", "utf8");
+          const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const heading = new RegExp(`^## \\[${escaped}\\](?: - \\d{4}-\\d{2}-\\d{2})?\\s*$`, "m").exec(changelog);
+
+          if (!heading) {
+            throw new Error(`CHANGELOG.md does not contain a section for ${version}`);
+          }
+
+          const sectionStart = heading.index + heading[0].length;
+          const rest = changelog.slice(sectionStart);
+          const nextHeading = rest.search(/^## \[/m);
+          const section = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
+          writeFileSync("release-notes.md", `${section.trim()}\n`);
+          NODE
+
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -79,15 +101,17 @@ jobs:
 
           gh release create "${RELEASE_TAG}" \
             --title "${RELEASE_TAG}" \
-            --notes "Croc ${RELEASE_TAG}" \
+            --notes-file ../release-notes.md \
             croc-darwin-arm64.tar.gz \
             croc-darwin-x64.tar.gz \
             croc-linux-arm64.tar.gz \
             croc-linux-x64.tar.gz \
-            2>/dev/null || \
-          gh release upload "${RELEASE_TAG}" \
-            croc-darwin-arm64.tar.gz \
-            croc-darwin-x64.tar.gz \
-            croc-linux-arm64.tar.gz \
-            croc-linux-x64.tar.gz \
-            --clobber
+            2>/dev/null || {
+            gh release edit "${RELEASE_TAG}" --notes-file ../release-notes.md
+            gh release upload "${RELEASE_TAG}" \
+              croc-darwin-arm64.tar.gz \
+              croc-darwin-x64.tar.gz \
+              croc-linux-arm64.tar.gz \
+              croc-linux-x64.tar.gz \
+              --clobber
+          }

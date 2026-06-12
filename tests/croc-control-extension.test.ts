@@ -22,6 +22,7 @@ interface RegisteredCommand {
 
 interface RegisteredTool {
 	name: string;
+	label?: string;
 	description?: string;
 	promptSnippet?: string;
 	promptGuidelines?: unknown;
@@ -215,6 +216,127 @@ describe("Croc supervisor control extension", () => {
 		assert.throws(() => activateExtension(), /Configured Pi models file not found: .*missing-models\.json/);
 	});
 
+	it("registers Headroom-routed global Pi providers as baseUrl-only overrides", () => {
+		const configPath = join(tempRoot, "croc.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				batteries: {
+					headroom: {
+						enabled: true,
+						proxy: {
+							mode: "external",
+							url: "http://127.0.0.1:18787/",
+						},
+						routing: {
+							providers: {
+								openai: { target: "openai" },
+							},
+						},
+					},
+				},
+			}),
+			"utf-8",
+		);
+		process.env.CROC_CONFIG = configPath;
+
+		const pi = activateExtension();
+
+		assert.deepEqual([...pi.providers.keys()], ["openai"]);
+		assert.deepEqual(providerRecord(pi, "openai"), { baseUrl: "http://127.0.0.1:18787/v1" });
+	});
+
+	it("does not register headroom_retrieve when CCR mode is disabled", () => {
+		const configPath = join(tempRoot, "croc.json");
+		writeFileSync(configPath, JSON.stringify(headroomConfig("disabled", "https://headroom.example.test")), "utf-8");
+		process.env.CROC_CONFIG = configPath;
+
+		const pi = activateExtension();
+
+		assert.equal(pi.tools.has("headroom_retrieve"), false);
+	});
+
+	it("registers exactly one bridge tool when CCR mode is bridge", () => {
+		const configPath = join(tempRoot, "croc.json");
+		writeFileSync(configPath, JSON.stringify(headroomConfig("bridge")), "utf-8");
+		process.env.CROC_CONFIG = configPath;
+
+		const pi = activateExtension();
+		const tool = pi.tools.get("headroom_retrieve");
+
+		assert.equal([...pi.tools.keys()].filter((name) => name === "headroom_retrieve").length, 1);
+		assert.ok(tool);
+		assert.equal(tool.name, "headroom_retrieve");
+		assert.equal(tool.label, "Headroom Retrieve");
+		assert.equal(
+			tool.description,
+			"Retrieve original content for a Headroom CCR hash from the configured local proxy.",
+		);
+		assert.deepEqual(tool.parameters, {
+			type: "object",
+			properties: {
+				hash: {
+					type: "string",
+					pattern: "^[a-fA-F0-9]{24}$",
+				},
+				query: {
+					type: "string",
+					maxLength: 1000,
+				},
+			},
+			required: ["hash"],
+			additionalProperties: false,
+		});
+	});
+
+	it("does not duplicate the bridge tool across repeated activation in the fake harness", () => {
+		const configPath = join(tempRoot, "croc.json");
+		writeFileSync(configPath, JSON.stringify(headroomConfig("bridge")), "utf-8");
+		process.env.CROC_CONFIG = configPath;
+		const pi = new FakePi();
+
+		crocProviderExtension(pi as never);
+		crocProviderExtension(pi as never);
+
+		assert.equal([...pi.tools.keys()].filter((name) => name === "headroom_retrieve").length, 1);
+		assert.equal(pi.tools.size, expectedTools.length + 1);
+	});
+
+	it("fails activation for untrusted non-local Headroom bridge origins", () => {
+		const configPath = join(tempRoot, "croc.json");
+		writeFileSync(configPath, JSON.stringify(headroomConfig("bridge", "https://headroom.example.test")), "utf-8");
+		process.env.CROC_CONFIG = configPath;
+
+		assert.throws(() => activateExtension(), /origin is not trusted/);
+	});
+
+	it("fails clearly when extension activation sees an unsupported Headroom target", () => {
+		const configPath = join(tempRoot, "croc.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				batteries: {
+					headroom: {
+						enabled: true,
+						proxy: {
+							mode: "external",
+							url: "http://127.0.0.1:18787/",
+						},
+						routing: {
+							providers: {
+								gemini: { target: "gemini" },
+							},
+						},
+					},
+				},
+			}),
+			"utf-8",
+		);
+		process.env.CROC_CONFIG = configPath;
+
+		assert.throws(() => activateExtension(), /Headroom target "gemini" is not supported in v1/);
+	});
+
 	it("registers complete tool metadata and returns text for safe tool calls", async () => {
 		const { projectRoot } = writeCrocWorkspace();
 		const pi = activateExtension();
@@ -308,8 +430,7 @@ describe("Croc supervisor control extension", () => {
 		assert.ok(toolOutput.includes(`Source root: ${sourceRoot}`));
 	});
 
-	function activateExtension(): FakePi {
-		const pi = new FakePi();
+	function activateExtension(pi = new FakePi()): FakePi {
 		crocProviderExtension(pi as never);
 		return pi;
 	}
@@ -345,6 +466,31 @@ describe("Croc supervisor control extension", () => {
 		return { projectRoot, sessionConfigPath, sourceRoot };
 	}
 });
+
+function headroomConfig(mode: "disabled" | "bridge", url = "http://127.0.0.1:18787/"): Record<string, unknown> {
+	return {
+		batteries: {
+			headroom: {
+				enabled: true,
+				proxy: {
+					mode: "external",
+					url,
+				},
+				routing: {
+					providers: {
+						openai: { target: "openai" },
+					},
+				},
+				ccr: {
+					mode,
+					timeoutSeconds: 1,
+					maxResultBytes: 4096,
+					trustedOrigins: [],
+				},
+			},
+		},
+	};
+}
 
 function crocConfig(profile: string): Record<string, unknown> {
 	return {

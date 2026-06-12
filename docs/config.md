@@ -224,3 +224,105 @@ batteries:
 ```
 
 When enabled, Croc adds the configured web-search package to `.pi/settings.json` and passes `SEARXNG_URL` to Pi.
+
+### batteries.headroom
+
+Headroom is an optional Croc battery for routing selected Pi providers through a Headroom compression proxy. Configure it under `batteries.headroom`; Croc owns proxy readiness and routed provider `baseUrl` rewrites, while Pi model config remains the source of truth for provider identity, credentials, model metadata, context windows, and model selection.
+
+Managed mode lets Croc start `headroom proxy` in the background during `croc start`:
+
+```yaml
+batteries:
+  headroom:
+    enabled: true
+    proxy:
+      mode: managed
+      command: headroom
+      url: http://127.0.0.1:18787
+      telemetry: off
+      requireReady: true
+      startupTimeoutSeconds: 120
+      targets:
+        openai:
+          upstreamUrl: https://llm.example.invalid/v1
+    routing:
+      providers:
+        example-llm:
+          target: openai
+    ccr:
+      mode: disabled
+```
+
+`proxy.command` must resolve to a working Headroom CLI with proxy dependencies installed. A package install normally provides `headroom`; a local Headroom source checkout may need an absolute command path such as `.venv/bin/headroom` after installing the `proxy` extra. Croc inherits the environment from `croc start`, so local development-only variables such as `HEADROOM_REQUIRE_RUST_CORE=false` can be set on that command when testing a degraded Headroom checkout. Do not use degraded mode as a production fix.
+
+External mode uses an already-running proxy. Croc checks readiness but does not start, stop, or mutate the proxy:
+
+```yaml
+batteries:
+  headroom:
+    enabled: true
+    proxy:
+      mode: external
+      url: http://127.0.0.1:18787
+    routing:
+      providers:
+        example-llm:
+          target: openai
+    ccr:
+      mode: bridge
+```
+
+Route targets in v1:
+
+| Target | Routed provider `baseUrl` |
+|--------|----------------------------|
+| `openai` | `${proxy.url}/v1` |
+| `anthropic` | `${proxy.url}` |
+| `gemini` | rejected in v1 |
+| `cloudcode` | rejected in v1 |
+
+Prefer `batteries.headroom.routing.providers` over writing routed provider URLs by hand:
+
+```yaml
+pi:
+  models:
+    providers:
+      example-llm:
+        baseUrl: http://127.0.0.1:18787/v1
+```
+
+If a provider is routed through Headroom and also declares `pi.models.providers.<name>.baseUrl`, Croc fails unless the explicit value equals the derived Headroom URL after trailing slash normalization.
+
+#### OpenAI provider compatibility
+
+For OpenAI-compatible providers, keep the Pi provider `api` aligned with the API shape exposed by the upstream:
+
+| Pi provider `api` | Headroom endpoint |
+|-------------------|-------------------|
+| `openai-completions` | `${proxy.url}/v1/chat/completions` |
+| `openai-responses` | `${proxy.url}/v1/responses` |
+
+Croc only rewrites the routed provider `baseUrl` to Headroom. It does not change the provider `api`, credentials, model metadata, request shape, or Pi parser. Use the same `api` value the provider would use without Headroom. Switch APIs only when the upstream model is intentionally exposed through a different OpenAI API shape.
+
+Custom Croc-local models should include the model metadata Pi expects, especially `contextWindow`, `maxTokens`, and `cost`. Missing metadata can surface as Pi-side display or usage-accounting errors even when the Headroom request itself succeeds.
+
+`ccr.mode: disabled` is the default. In v1, disabled means Croc does not register the Pi-side `headroom_retrieve` bridge. It does not alter Headroom's internal CCR injection behavior.
+
+`ccr.mode: bridge` opts in to `headroom_retrieve`. The bridge uses `headroom-ai` to return original uncompressed content, so output may enter model context and Taskplane event streams. Local proxy origins (`localhost`, `127.0.0.1`, and `::1`) are allowed; any other proxy origin must be listed exactly in `ccr.trustedOrigins`.
+
+`croc apply` stays offline. It validates config and writes runtime files only; it does not start Headroom, check `/readyz`, or perform Headroom process work.
+
+`croc start` starts a managed proxy or checks an external proxy, waits for `/readyz`, then launches the dashboard and Pi. Croc does not add a Headroom dashboard panel in v1. Use Headroom's native dashboard for Headroom metrics and detailed proxy state.
+
+For end-to-end smoke tests, use separate ports for Headroom and the Taskplane dashboard. If a dashboard port is already occupied, choose another port before treating dashboard startup as healthy.
+
+Managed mode writes:
+
+| File | Purpose |
+|------|---------|
+| `${runtimeRoot}/.croc/headroom/proxy.pid` | managed proxy PID |
+| `${runtimeRoot}/.croc/headroom/proxy-state.json` | managed launch state |
+| `${runtimeRoot}/.croc/headroom/proxy.stdout.log` | managed proxy stdout |
+| `${runtimeRoot}/.croc/headroom/proxy.stderr.log` | managed proxy stderr |
+
+Managed mode in v1 is not a restart supervisor. Croc avoids duplicate starts, removes stale PID/state files, and fails rather than killing unknown live processes. Treat Headroom logs as sensitive because they may contain upstream details.

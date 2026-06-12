@@ -1595,6 +1595,9 @@ function makeResult(
 					costUsd: finalTelemetry?.costUsd ?? 0,
 					toolCalls: finalTelemetry?.toolCalls ?? 0,
 					durationMs: finalTelemetry?.durationMs ?? 0,
+					compactions: finalTelemetry?.compactions,
+					compactionsStarted: finalTelemetry?.compactionsStarted,
+					compactionsCompleted: finalTelemetry?.compactionsCompleted,
 				};
 
 	const result: LaneRunnerTaskResult = {
@@ -1659,6 +1662,9 @@ export function readReviewerTelemetrySnapshot(
 			outputTokens: number;
 			cacheReadTokens: number;
 			cacheWriteTokens: number;
+			compactions: number;
+			compactionsStarted: number;
+			compactionsCompleted: number;
 			updatedAt: number;
 			reviewType: string;
 			reviewStep: number;
@@ -1681,6 +1687,13 @@ export function readReviewerTelemetrySnapshot(
 			outputTokens: Number.isFinite(parsed.outputTokens) ? Number(parsed.outputTokens) : 0,
 			cacheReadTokens: Number.isFinite(parsed.cacheReadTokens) ? Number(parsed.cacheReadTokens) : 0,
 			cacheWriteTokens: Number.isFinite(parsed.cacheWriteTokens) ? Number(parsed.cacheWriteTokens) : 0,
+			compactions: Number.isFinite(parsed.compactions) ? Number(parsed.compactions) : undefined,
+			compactionsStarted: Number.isFinite(parsed.compactionsStarted)
+				? Number(parsed.compactionsStarted)
+				: undefined,
+			compactionsCompleted: Number.isFinite(parsed.compactionsCompleted)
+				? Number(parsed.compactionsCompleted)
+				: undefined,
 			reviewType: typeof parsed.reviewType === "string" ? parsed.reviewType : undefined,
 			reviewStep: Number.isFinite(parsed.reviewStep) ? Number(parsed.reviewStep) : undefined,
 		};
@@ -1772,6 +1785,9 @@ function emitSnapshot(
 				outputTokens: telemetry.outputTokens ?? 0,
 				cacheReadTokens: telemetry.cacheReadTokens ?? 0,
 				cacheWriteTokens: telemetry.cacheWriteTokens ?? 0,
+				compactions: telemetry.compactions,
+				compactionsStarted: telemetry.compactionsStarted,
+				compactionsCompleted: telemetry.compactionsCompleted,
 			},
 			reviewer: reviewerSnapshot,
 			progress,

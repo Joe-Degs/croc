@@ -28,6 +28,7 @@ import readline from "node:readline";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { execSync, execFileSync, spawn } from "node:child_process";
+import { createJiti } from "jiti";
 import {
 	TASKPLANE_GITIGNORE_HEADER,
 	TASKPLANE_GITIGNORE_NPM_HEADER,
@@ -45,6 +46,7 @@ const __dirname = path.dirname(__filename);
 const PACKAGE_ROOT = path.resolve(__dirname, "..");
 const TEMPLATES_DIR = path.join(PACKAGE_ROOT, "templates");
 const DASHBOARD_SERVER = path.join(PACKAGE_ROOT, "dashboard", "server.cjs");
+const jiti = createJiti(import.meta.url);
 
 // ─── ANSI Colors ────────────────────────────────────────────────────────────
 
@@ -3413,6 +3415,208 @@ function cmdDashboard(args) {
 	});
 }
 
+// ─── status / summary / integrate ───────────────────────────────────────────
+
+function taskplaneModule(fileName) {
+	return jiti(path.join(PACKAGE_ROOT, "extensions", "taskplane", fileName));
+}
+
+function loadPersistenceApi() {
+	return taskplaneModule("persistence.ts");
+}
+
+function loadWorkspaceApi() {
+	return taskplaneModule("workspace.ts");
+}
+
+function loadConfigApi() {
+	return taskplaneModule("config.ts");
+}
+
+function loadSupervisorApi() {
+	return taskplaneModule("supervisor.ts");
+}
+
+function loadIntegrationApi() {
+	return taskplaneModule("integration.ts");
+}
+
+function formatDurationMs(ms) {
+	if (!Number.isFinite(ms) || ms < 0) return "unknown";
+	const seconds = Math.round(ms / 1000);
+	const minutes = Math.floor(seconds / 60);
+	const remaining = seconds % 60;
+	return minutes > 0 ? `${minutes}m ${remaining}s` : `${remaining}s`;
+}
+
+function formatTokenCounts(tokens) {
+	if (!tokens) return "tokens unavailable";
+	const input = tokens.input || 0;
+	const output = tokens.output || 0;
+	const cacheRead = tokens.cacheRead || 0;
+	const cacheWrite = tokens.cacheWrite || 0;
+	const total = input + output + cacheRead + cacheWrite;
+	return `${total.toLocaleString()} total (${input.toLocaleString()} in, ${output.toLocaleString()} out)`;
+}
+
+function loadRuntimeSnapshots(projectRoot, batchId) {
+	const lanesDir = path.join(projectRoot, ".pi", "runtime", batchId, "lanes");
+	if (!fs.existsSync(lanesDir)) return [];
+	const snapshots = [];
+	for (const fileName of fs.readdirSync(lanesDir)) {
+		if (!fileName.endsWith(".json")) continue;
+		try {
+			const snapshot = JSON.parse(fs.readFileSync(path.join(lanesDir, fileName), "utf-8"));
+			snapshots.push({ fileName, snapshot });
+		} catch {
+			// Ignore partial snapshots; they are sidecar telemetry, not authority.
+		}
+	}
+	return snapshots.sort((a, b) => a.fileName.localeCompare(b.fileName));
+}
+
+function formatCompactionSnapshot(agent) {
+	const started = Number.isFinite(agent.compactionsStarted) ? agent.compactionsStarted : null;
+	const completed = Number.isFinite(agent.compactionsCompleted) ? agent.compactionsCompleted : null;
+	if (started !== null || completed !== null) {
+		return `, compactions ${started ?? 0} started/${completed ?? 0} completed`;
+	}
+	return Number.isFinite(agent.compactions) ? `, compactions ${agent.compactions}` : "";
+}
+
+export function formatAgentSnapshot(label, agent) {
+	if (!agent) return null;
+	const context = Number.isFinite(agent.contextPct) ? `ctx ${agent.contextPct.toFixed(1)}%` : "ctx n/a";
+	const tokens = `${((agent.inputTokens || 0) + (agent.outputTokens || 0) + (agent.cacheReadTokens || 0) + (agent.cacheWriteTokens || 0)).toLocaleString()} tokens`;
+	const compactions = formatCompactionSnapshot(agent);
+	const tools = Number.isFinite(agent.toolCalls) ? `, tools ${agent.toolCalls}` : "";
+	return `- ${label}: ${agent.status || "unknown"}, ${context}${compactions}, ${tokens}${tools}`;
+}
+
+function cmdStatus() {
+	const projectRoot = process.cwd();
+	const { loadBatchState } = loadPersistenceApi();
+	const state = loadBatchState(projectRoot);
+	if (!state) {
+		console.log("No Taskplane batch state found.");
+		return;
+	}
+
+	const elapsedMs = state.endedAt ? state.endedAt - state.startedAt : Date.now() - state.startedAt;
+	console.log(`Batch ${state.batchId} — ${state.phase}`);
+	console.log(`Wave: ${state.currentWaveIndex + 1}/${state.taskLevelWaveCount ?? state.totalWaves}`);
+	console.log(
+		`Tasks: ${state.succeededTasks} succeeded, ${state.failedTasks} failed, ${state.skippedTasks} skipped, ${state.blockedTasks} blocked / ${state.totalTasks} total`,
+	);
+	console.log(`Elapsed: ${formatDurationMs(elapsedMs)}`);
+	if (state.orchBranch) console.log(`Orch branch: ${state.orchBranch}`);
+	if (state.lastError) console.log(`Last error: ${state.lastError.code}: ${state.lastError.message}`);
+
+	if (state.lanes?.length) {
+		console.log("Lanes:");
+		for (const lane of [...state.lanes].sort((a, b) => a.laneNumber - b.laneNumber)) {
+			const laneTasks = (state.tasks || []).filter((task) => task.laneNumber === lane.laneNumber);
+			const runningTask = laneTasks.find((task) => task.status === "running");
+			const activeTask = runningTask || laneTasks[laneTasks.length - 1];
+			const taskLabel = activeTask ? `${activeTask.taskId} (${activeTask.status})` : "idle";
+			const repoPart = lane.repoId ? `, repo ${lane.repoId}` : "";
+			console.log(`- Lane ${lane.laneNumber}: ${taskLabel}${repoPart}`);
+		}
+	}
+
+	const snapshots = loadRuntimeSnapshots(projectRoot, state.batchId);
+	if (snapshots.length) {
+		console.log("Agents:");
+		for (const { fileName, snapshot } of snapshots) {
+			if (fileName.startsWith("merge-")) {
+				const line = formatAgentSnapshot(snapshot.sessionName || fileName.replace(/\.json$/, ""), snapshot.agent);
+				if (line) console.log(line);
+				continue;
+			}
+			const worker = formatAgentSnapshot(`${snapshot.taskId || fileName} worker`, snapshot.worker);
+			if (worker) console.log(worker);
+			const reviewer = formatAgentSnapshot(`${snapshot.taskId || fileName} reviewer`, snapshot.reviewer);
+			if (reviewer) console.log(reviewer);
+		}
+	}
+
+	if (state.mergeResults?.length) {
+		console.log("Merge results:");
+		for (const result of state.mergeResults) {
+			const repos = (result.repoResults || []).map((repo) => `${repo.repoId || "repo"}:${repo.status}`).join(", ");
+			console.log(`- ${result.status}${repos ? ` (${repos})` : ""}`);
+		}
+	}
+}
+
+function cmdSummary() {
+	const projectRoot = process.cwd();
+	const { loadBatchHistory, loadBatchState } = loadPersistenceApi();
+	const history = loadBatchHistory(projectRoot);
+	const latest = history[0];
+	if (!latest) {
+		console.log("No Taskplane batch history found.");
+		return;
+	}
+	const state = loadBatchState(projectRoot);
+	console.log(`Latest batch ${latest.batchId} — ${latest.status}`);
+	console.log(`Duration: ${formatDurationMs(latest.durationMs)}`);
+	console.log(
+		`Tasks: ${latest.succeededTasks} succeeded, ${latest.failedTasks} failed, ${latest.skippedTasks} skipped, ${latest.blockedTasks} blocked / ${latest.totalTasks} total`,
+	);
+	console.log(formatTokenCounts(latest.tokens));
+	if (latest.integratedAt) console.log(`Integrated: ${new Date(latest.integratedAt).toISOString()}`);
+	if (state?.batchId === latest.batchId && state.orchBranch) {
+		console.log(`Integration source: ${state.orchBranch}`);
+		console.log(state.phase === "completed" ? "Integration: ready" : `Integration: blocked, batch is ${state.phase}`);
+	}
+	if (latest.tasks?.length) {
+		console.log("Tasks:");
+		for (const task of latest.tasks) {
+			console.log(`- ${task.taskId}: ${task.status} (lane ${task.lane}, ${formatDurationMs(task.durationMs)})`);
+		}
+	}
+}
+
+function getExecutionContext(projectRoot) {
+	const { buildExecutionContext } = loadWorkspaceApi();
+	const { loadOrchestratorConfig, loadTaskRunnerConfig } = loadConfigApi();
+	return buildExecutionContext(projectRoot, loadOrchestratorConfig, loadTaskRunnerConfig);
+}
+
+function parseIntegrateMode(args, plannedMode) {
+	if (args.includes("--pr")) return "pr";
+	if (args.includes("--merge")) return "merge";
+	if (args.includes("--ff") || args.includes("--fast-forward")) return "ff";
+	return plannedMode;
+}
+
+function cmdIntegrate(args) {
+	const projectRoot = process.cwd();
+	const { loadBatchState } = loadPersistenceApi();
+	const { buildIntegrationPlan } = loadSupervisorApi();
+	const { buildIntegrationExecutor } = loadIntegrationApi();
+	const state = loadBatchState(projectRoot);
+	if (!state) die("No Taskplane batch state found.");
+	if (state.phase !== "completed") die(`Batch ${state.batchId} is ${state.phase}, not completed.`);
+
+	const context = getExecutionContext(projectRoot);
+	const plan = buildIntegrationPlan(state, context.repoRoot);
+	if (!plan) die(`Batch ${state.batchId} has nothing to integrate.`);
+	const mode = parseIntegrateMode(args, plan.mode);
+	const executor = buildIntegrationExecutor(context.repoRoot, "taskplane-cli", context.workspaceRoot);
+	const result = executor(mode, {
+		orchBranch: state.orchBranch,
+		baseBranch: state.baseBranch,
+		batchId: state.batchId,
+		currentBranch: state.baseBranch,
+		notices: [],
+	});
+
+	if (!result.success) die(result.error || result.message || "Integration failed.");
+	console.log(result.message || `Integrated ${state.orchBranch} into ${state.baseBranch}.`);
+}
+
 // ─── help ───────────────────────────────────────────────────────────────────
 
 function showHelp() {
@@ -3427,6 +3631,9 @@ ${c.bold}Commands:${c.reset}
   ${c.cyan}init${c.reset}           Scaffold Taskplane config in the current project
   ${c.cyan}doctor${c.reset}         Validate installation and project configuration
   ${c.cyan}config${c.reset}         Manage CLI config utilities (e.g., save init defaults)
+  ${c.cyan}status${c.reset}         Show current persisted batch status
+  ${c.cyan}summary${c.reset}        Show latest persisted batch summary
+  ${c.cyan}integrate${c.reset}      Integrate a completed batch into the working branch
   ${c.cyan}version${c.reset}        Show version information
   ${c.cyan}dashboard${c.reset}      Launch the web-based orchestrator dashboard
   ${c.cyan}uninstall${c.reset}      Remove Taskplane project files and/or package install
@@ -3449,6 +3656,11 @@ ${c.bold}Config options:${c.reset}
   --save-as-defaults  Save current project's worker/reviewer/merger model + thinking
                       settings to global preferences for future taskplane init runs
 
+${c.bold}Integrate options:${c.reset}
+  --ff, --fast-forward  Fast-forward only
+  --merge               Create a merge commit
+  --pr                  Create a pull request
+
 ${c.bold}Uninstall options:${c.reset}
   --dry-run         Show what would be removed
   --yes, -y         Skip confirmation prompts
@@ -3467,6 +3679,9 @@ ${c.bold}Examples:${c.reset}
   taskplane init --dry-run              # Preview what would be created
 	taskplane doctor                      # Check installation health
 	taskplane config --save-as-defaults   # Save current agent settings as init defaults
+	taskplane status                      # Show current batch state
+	taskplane summary                     # Show latest batch summary
+	taskplane integrate                   # Integrate completed batch
 	taskplane dashboard                   # Launch web dashboard
 	taskplane dashboard --port 3000       # Dashboard on custom port
 	taskplane dashboard --host 0.0.0.0    # Bind all interfaces
@@ -3496,6 +3711,15 @@ export async function main(argv = process.argv.slice(2)) {
 			break;
 		case "config":
 			cmdConfig(args);
+			break;
+		case "status":
+			cmdStatus();
+			break;
+		case "summary":
+			cmdSummary();
+			break;
+		case "integrate":
+			cmdIntegrate(args);
 			break;
 		case "version":
 		case "--version":

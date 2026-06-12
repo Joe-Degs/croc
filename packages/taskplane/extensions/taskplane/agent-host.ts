@@ -260,6 +260,11 @@ function isSensitiveKey(key: string): string | null {
 	return null;
 }
 
+function isNumericTelemetryKey(key: string): boolean {
+	const normalized = key.toLowerCase();
+	return normalized === "tokens" || /(?:^|_)?tokens?(?:before|after|saved|input|output|read|write)?$/i.test(key);
+}
+
 function truncateUtf8WithMetadata(text: string, maxBytes: number): { value: string; truncated: boolean; originalBytes?: number } {
 	const originalBytes = Buffer.byteLength(text, "utf8");
 	if (originalBytes <= maxBytes) return { value: text, truncated: false };
@@ -307,6 +312,7 @@ export function projectRuntimeValue(value: unknown, options: ProjectionOptions =
 	function walk(input: unknown, path: string, depth: number, keyHint?: string): unknown {
 		const sensitive = keyHint ? isSensitiveKey(keyHint) : null;
 		if (sensitive) {
+			if (typeof input === "number" && keyHint && isNumericTelemetryKey(keyHint)) return input;
 			redacted = true;
 			redactedPaths.push(path);
 			return `[REDACTED:${sensitive}]`;
@@ -792,6 +798,20 @@ export interface AgentHostOptions {
 	maxExitInterceptions?: number;
 }
 
+export interface CompactionTelemetryEvent {
+	phase: "started" | "ended";
+	reason?: string;
+	legacy?: boolean;
+	status?: "completed" | "aborted" | "failed" | "skipped";
+	success?: boolean;
+	aborted?: boolean;
+	willRetry?: boolean;
+	errorMessage?: string;
+	tokensBefore?: number;
+	tokensAfter?: number;
+	tokensSaved?: number;
+}
+
 /**
  * Accumulated telemetry from a completed agent session.
  *
@@ -824,6 +844,12 @@ export interface AgentHostResult {
 	retries: number;
 	/** Number of auto-compactions */
 	compactions: number;
+	/** Number of compaction starts */
+	compactionsStarted: number;
+	/** Number of completed compactions */
+	compactionsCompleted: number;
+	/** Ordered compaction lifecycle records */
+	compactionEvents: CompactionTelemetryEvent[];
 	/** Authoritative context usage from Pi */
 	contextUsage: { tokens: number; contextWindow: number; percent: number } | null;
 	/** Final error message (null if clean exit) */
@@ -959,6 +985,10 @@ export function spawnAgent(
 		toolCalls = 0,
 		retries = 0,
 		compactions = 0;
+	let compactionsStarted = 0,
+		compactionsCompleted = 0;
+	let compactionActive = false;
+	const compactionEvents: CompactionTelemetryEvent[] = [];
 	let lastTool = "",
 		error: string | null = null;
 	let contextUsage: AgentHostResult["contextUsage"] = null;
@@ -978,6 +1008,7 @@ export function spawnAgent(
 
 	// Timeout
 	let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+	let stdinCloseHandle: ReturnType<typeof setTimeout> | null = null;
 	if (timeoutMs > 0) {
 		timeoutHandle = setTimeout(() => {
 			timedOut = true;
@@ -1024,25 +1055,86 @@ export function spawnAgent(
 		refreshRegistrySnapshot(true);
 	}
 
+	function cancelScheduledStdinClose() {
+		if (!stdinCloseHandle) return;
+		clearTimeout(stdinCloseHandle);
+		stdinCloseHandle = null;
+	}
+
 	// Helper: close stdin safely with delay
 	function closeStdin() {
-		if (stdinClosed) return;
-		stdinClosed = true;
-		if (closeDelayMs > 0) {
-			setTimeout(() => {
-				try {
-					proc.stdin?.end();
-				} catch {
-					/* ignore */
-				}
-			}, closeDelayMs);
-		} else {
+		if (stdinClosed || stdinCloseHandle || compactionActive) return;
+		const endStdin = () => {
+			stdinCloseHandle = null;
+			if (stdinClosed || compactionActive) return;
+			stdinClosed = true;
 			try {
 				proc.stdin?.end();
 			} catch {
 				/* ignore */
 			}
+		};
+		if (closeDelayMs > 0) {
+			stdinCloseHandle = setTimeout(endStdin, closeDelayMs);
+		} else {
+			endStdin();
 		}
+	}
+
+	function collectCompactionTokenCounts(result: unknown): Pick<CompactionTelemetryEvent, "tokensBefore" | "tokensAfter" | "tokensSaved"> {
+		if (!isRecord(result)) return {};
+		const counts: Pick<CompactionTelemetryEvent, "tokensBefore" | "tokensAfter" | "tokensSaved"> = {};
+		if (typeof result.tokensBefore === "number") counts.tokensBefore = result.tokensBefore;
+		if (typeof result.tokensAfter === "number") counts.tokensAfter = result.tokensAfter;
+		if (typeof result.tokensSaved === "number") counts.tokensSaved = result.tokensSaved;
+		return counts;
+	}
+
+	function handleCompactionStart(event: Record<string, unknown>) {
+		cancelScheduledStdinClose();
+		compactionActive = true;
+		compactions++;
+		compactionsStarted++;
+		const reason = typeof event.reason === "string" ? event.reason : undefined;
+		const record: CompactionTelemetryEvent = { phase: "started", ...(reason ? { reason } : {}) };
+		compactionEvents.push(record);
+		emitEvent("compaction_started", { ...(reason ? { reason } : {}) });
+	}
+
+	function handleLegacyCompactionStart(event: Record<string, unknown>) {
+		compactions++;
+		const reason = typeof event.reason === "string" ? event.reason : undefined;
+		const payload = { ...(reason ? { reason } : {}), legacy: true };
+		compactionEvents.push({ phase: "started", ...payload });
+		emitEvent("compaction_started", payload);
+	}
+
+	function handleCompactionEnd(event: Record<string, unknown>) {
+		compactionActive = false;
+		const aborted = event.aborted === true;
+		const willRetry = event.willRetry === true;
+		const hasResult = isRecord(event.result);
+		const completed = hasResult && !aborted && event.success !== false;
+		const success = completed;
+		if (completed) compactionsCompleted++;
+		if (willRetry) agentEnded = false;
+
+		const reason = typeof event.reason === "string" ? event.reason : undefined;
+		const errorMessage = firstStringField(event, ["errorMessage", "error"]);
+		const status: CompactionTelemetryEvent["status"] = aborted ? "aborted" : success ? "completed" : errorMessage || event.success === false ? "failed" : "skipped";
+		const tokenCounts = success ? collectCompactionTokenCounts(event.result) : {};
+		const payload = {
+			...(reason ? { reason } : {}),
+			status,
+			success,
+			aborted,
+			willRetry,
+			...(errorMessage ? { errorMessage } : {}),
+			...tokenCounts,
+		};
+		compactionEvents.push({ phase: "ended", ...payload });
+		emitEvent("compaction_finished", payload);
+		if (agentEnded && !willRetry) closeStdin();
 	}
 
 	// Helper: emit normalized event
@@ -1201,6 +1293,9 @@ export function spawnAgent(
 				lastTool,
 				retries,
 				compactions,
+				compactionsStarted,
+				compactionsCompleted,
+				compactionEvents: [...compactionEvents],
 				contextUsage,
 				error,
 				agentEnded,
@@ -1227,6 +1322,9 @@ export function spawnAgent(
 						toolCalls,
 						retries,
 						compactions,
+						compactionsStarted,
+						compactionsCompleted,
+						compactionEvents,
 						durationSec: Math.round(result.durationMs / 1000),
 						lastToolCall: lastTool || null,
 						error: error || null,
@@ -1507,10 +1605,19 @@ export function spawnAgent(
 						});
 						break;
 					}
-					case "auto_compaction_start":
+					case "auto_compaction_start": {
+						handleLegacyCompactionStart(event);
+						break;
+					}
 					case "compaction_start": {
-						compactions++;
-						emitEvent("compaction_started", {});
+						handleCompactionStart(event);
+						break;
+					}
+					case "auto_compaction_end":
+					case "auto_compaction_finish":
+					case "compaction_finish":
+					case "compaction_end": {
+						handleCompactionEnd(event);
 						break;
 					}
 					case "response": {

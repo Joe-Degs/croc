@@ -1,6 +1,17 @@
-export type Command = "init" | "apply" | "doctor" | "start" | "attach" | "dashboard" | "config" | "help" | "version";
+export type Command =
+	| "init"
+	| "apply"
+	| "doctor"
+	| "start"
+	| "attach"
+	| "dashboard"
+	| "taskplane"
+	| "config"
+	| "help"
+	| "version";
 export type DashboardAction = "start" | "stop" | "status";
 export type ConfigAction = "show";
+export type TaskplaneAction = "status" | "summary" | "integrate";
 
 export interface Args {
 	command: Command;
@@ -11,6 +22,8 @@ export interface Args {
 	target?: string;
 	dashboardAction?: DashboardAction;
 	configAction?: ConfigAction;
+	taskplaneAction?: TaskplaneAction;
+	taskplaneArgs?: string[];
 	help: boolean;
 	diagnostics: Array<{ type: "warning" | "error"; message: string }>;
 }
@@ -32,9 +45,30 @@ export function parseArgs(rawArgs: string[]): Args {
 	let force = false;
 	let disableTmux = false;
 	let help = false;
+	let delegatingTaskplane = false;
 
 	for (let index = 0; index < rawArgs.length; index++) {
 		const arg = rawArgs[index];
+		if (delegatingTaskplane) {
+			if (arg === "--config") {
+				const value = readValue(rawArgs, index, arg, diagnostics);
+				if (value) {
+					configPath = value;
+					index++;
+				}
+				continue;
+			}
+			if (arg === "--cwd") {
+				const value = readValue(rawArgs, index, arg, diagnostics);
+				if (value) {
+					cwd = value;
+					index++;
+				}
+				continue;
+			}
+			positionals.push(arg);
+			continue;
+		}
 		if (arg === "--help" || arg === "-h") {
 			help = true;
 			continue;
@@ -72,6 +106,7 @@ export function parseArgs(rawArgs: string[]): Args {
 			continue;
 		}
 		positionals.push(arg);
+		if (arg === "taskplane") delegatingTaskplane = true;
 	}
 
 	const first = positionals[0];
@@ -89,6 +124,16 @@ export function parseArgs(rawArgs: string[]): Args {
 	if (command === "dashboard") {
 		const action = positionals[1];
 		args.dashboardAction = action === "start" || action === "stop" || action === "status" ? action : "status";
+	} else if (command === "taskplane") {
+		const action = positionals[1] || "status";
+		if (action === "status" || action === "summary" || action === "integrate") {
+			args.taskplaneAction = action;
+			args.taskplaneArgs = positionals.slice(1).length > 0 ? positionals.slice(1) : ["status"];
+		} else {
+			diagnostics.push({ type: "error", message: `Unknown taskplane action: ${action}` });
+			args.taskplaneAction = "status";
+			args.taskplaneArgs = ["status"];
+		}
 	} else if (command === "config") {
 		args.configAction = "show";
 	} else if (command === "start") {
@@ -107,6 +152,7 @@ function toCommand(value: string | undefined, help: boolean): Command {
 		value === "start" ||
 		value === "attach" ||
 		value === "dashboard" ||
+		value === "taskplane" ||
 		value === "config" ||
 		value === "version"
 	) {
@@ -125,6 +171,7 @@ Usage:
   croc start [target] [--config <path>] [--no-tmux]
   croc attach [--config <path>]
   croc dashboard <start|stop|status> [--config <path>]
+  croc taskplane <status|summary|integrate> [--config <path>]
   croc config show [--config <path>]
 
 Options:
@@ -140,5 +187,6 @@ Examples:
   croc apply
   croc start all
   croc dashboard start
+  croc taskplane status
 `);
 }

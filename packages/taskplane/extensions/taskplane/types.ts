@@ -834,6 +834,12 @@ export interface LaneTaskOutcomeTelemetry {
 	toolCalls: number;
 	/** End-to-end duration in milliseconds for this outcome. */
 	durationMs: number;
+	/** Number of context compactions observed. Optional for older outcomes. */
+	compactions?: number;
+	/** Number of context compactions started. Optional for older outcomes. */
+	compactionsStarted?: number;
+	/** Number of context compactions completed. Optional for older outcomes. */
+	compactionsCompleted?: number;
 }
 
 /**
@@ -3400,6 +3406,12 @@ export interface BatchTaskSummary {
 	lane: number; // 1-based
 	durationMs: number;
 	tokens: TokenCounts;
+	/** Number of context compactions observed. Optional for older history entries. */
+	compactions?: number;
+	/** Number of context compactions started. Optional for older history entries. */
+	compactionsStarted?: number;
+	/** Number of context compactions completed. Optional for older history entries. */
+	compactionsCompleted?: number;
 	exitReason: string | null;
 }
 
@@ -4124,6 +4136,12 @@ export interface RuntimeAgentTelemetrySnapshot {
 	cacheReadTokens: number;
 	/** Cache write tokens */
 	cacheWriteTokens: number;
+	/** Number of context compactions observed. Optional for older snapshots. */
+	compactions?: number;
+	/** Number of context compactions started. Optional for older snapshots. */
+	compactionsStarted?: number;
+	/** Number of context compactions completed. Optional for older snapshots. */
+	compactionsCompleted?: number;
 }
 
 /**

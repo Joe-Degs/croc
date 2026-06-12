@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, "../..");
 const CLI_PATH = resolve(PROJECT_ROOT, "bin", "taskplane.mjs");
+const { formatAgentSnapshot } = await import(CLI_PATH);
 
 function runCli(args: string[]): { stdout: string; stderr: string; exitCode: number } {
 	try {
@@ -78,5 +79,32 @@ describe("CLI command surface", () => {
 		} finally {
 			rmSync(tempDir, { recursive: true, force: true });
 		}
+	});
+
+	it("formats new and legacy compaction snapshot counters", () => {
+		expect(
+			formatAgentSnapshot("lane worker", {
+				status: "running",
+				contextPct: 50,
+				inputTokens: 1,
+				outputTokens: 2,
+				cacheReadTokens: 3,
+				cacheWriteTokens: 4,
+				compactionsStarted: 1,
+				compactionsCompleted: 1,
+			}),
+		).toContain("compactions 1 started/1 completed");
+
+		expect(
+			formatAgentSnapshot("old worker", {
+				status: "running",
+				contextPct: 50,
+				inputTokens: 1,
+				outputTokens: 2,
+				cacheReadTokens: 3,
+				cacheWriteTokens: 4,
+				compactions: 1,
+			}),
+		).toContain("compactions 1");
 	});
 });

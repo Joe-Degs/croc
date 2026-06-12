@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { HeadroomClient } from "headroom-ai";
 import { parse as parseYaml } from "yaml";
 import { applyConfig } from "../core/apply.ts";
 import {
@@ -12,6 +13,13 @@ import {
 } from "../core/config.ts";
 import { getDashboardState, getDashboardUrl, startDashboard, stopDashboard } from "../core/dashboard.ts";
 import { runDoctor } from "../core/doctor.ts";
+import {
+	formatHeadroomRetrieveResult,
+	getHeadroomBridgeBaseUrl,
+	type HeadroomRetriever,
+	runHeadroomRetrieve,
+	shouldRegisterHeadroomBridge,
+} from "../core/headroom-bridge.ts";
 import { getConfiguredPiProviders } from "../core/pi-models.ts";
 import { redactSecrets, redactSensitiveText } from "../core/redaction.ts";
 import { resolveRuntimeContext } from "../core/workspace.ts";
@@ -89,6 +97,22 @@ const applyParameters = {
 			description: "Set true only after the operator explicitly confirms Croc may rewrite generated runtime files.",
 		},
 	},
+	additionalProperties: false,
+};
+
+const headroomRetrieveParameters = {
+	type: "object",
+	properties: {
+		hash: {
+			type: "string",
+			pattern: "^[a-fA-F0-9]{24}$",
+		},
+		query: {
+			type: "string",
+			maxLength: 1000,
+		},
+	},
+	required: ["hash"],
 	additionalProperties: false,
 };
 
@@ -311,6 +335,10 @@ function toolText(text: string): { content: Array<{ type: "text"; text: string }
 	return { content: [{ type: "text", text: redactSensitiveText(text) }], details: undefined };
 }
 
+function inactiveAbortSignal(): AbortSignal {
+	return new AbortController().signal;
+}
+
 function commandNotify(ctx: { ui: { notify(message: string, level?: string): void } }, text: string): void {
 	ctx.ui.notify(redactSensitiveText(text), "info");
 }
@@ -338,6 +366,46 @@ export default function (pi: ExtensionAPI) {
 	if (startupConfig) {
 		for (const [name, provider] of getConfiguredPiProviders(startupConfig, startupConfigPath)) {
 			pi.registerProvider(name, provider);
+		}
+
+		if (shouldRegisterHeadroomBridge(startupConfig)) {
+			const baseUrl = getHeadroomBridgeBaseUrl(startupConfig);
+			const ccr = startupConfig.batteries.headroom.ccr;
+			const client = new HeadroomClient({
+				baseUrl,
+				timeout: ccr.timeoutSeconds * 1000,
+			});
+			const retriever: HeadroomRetriever = {
+				retrieve: (hash, retrieveOptions) => {
+					const query = retrieveOptions?.query;
+					return client.retrieve(hash, query ? { query } : undefined);
+				},
+			};
+
+			pi.registerTool({
+				name: "headroom_retrieve",
+				label: "Headroom Retrieve",
+				description: "Retrieve original content for a Headroom CCR hash from the configured local proxy.",
+				parameters: headroomRetrieveParameters,
+				execute: async (_toolCallId, params, signal) => {
+					try {
+						return toolText(
+							await runHeadroomRetrieve(params, {
+								retriever,
+								baseUrl,
+								maxResultBytes: ccr.maxResultBytes,
+								signal: signal ?? inactiveAbortSignal(),
+								trustedOrigins: ccr.trustedOrigins,
+							}),
+						);
+					} catch (error) {
+						const message = error instanceof Error ? error.message : String(error);
+						return toolText(
+							formatHeadroomRetrieveResult(`Error running headroom_retrieve: ${message}`, ccr.maxResultBytes),
+						);
+					}
+				},
+			});
 		}
 	}
 
