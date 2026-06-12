@@ -127,7 +127,6 @@ function assertOnlyReleaseFilesChanged() {
 	const status = run("git", ["status", "--porcelain"], { capture: true });
 	const changed = status
 		.split("\n")
-		.map((line) => line.trim())
 		.filter(Boolean);
 	const allowed = new Set(["CHANGELOG.md", "package.json", "package-lock.json", "src/core/config.ts"]);
 	const unexpected = changed.filter((line) => !allowed.has(line.slice(3)));
