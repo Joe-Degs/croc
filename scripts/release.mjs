@@ -53,6 +53,14 @@ function readChangelog() {
 	return readFileSync("CHANGELOG.md", "utf8");
 }
 
+function updateSourceVersion(version) {
+	const path = "src/core/config.ts";
+	const source = readFileSync(path, "utf8");
+	const updated = source.replace(/export const VERSION = "\d+\.\d+\.\d+";/, `export const VERSION = "${version}";`);
+	if (updated === source) throw new Error(`${path} does not contain an export const VERSION declaration.`);
+	writeFileSync(path, updated);
+}
+
 function compareVersions(a, b) {
 	const aParts = a.split(".").map(Number);
 	const bParts = b.split(".").map(Number);
@@ -121,7 +129,7 @@ function assertOnlyReleaseFilesChanged() {
 		.split("\n")
 		.map((line) => line.trim())
 		.filter(Boolean);
-	const allowed = new Set(["CHANGELOG.md", "package.json", "package-lock.json"]);
+	const allowed = new Set(["CHANGELOG.md", "package.json", "package-lock.json", "src/core/config.ts"]);
 	const unexpected = changed.filter((line) => !allowed.has(line.slice(3)));
 	if (unexpected.length > 0) {
 		throw new Error(`Release checks changed unexpected files:\n${unexpected.join("\n")}`);
@@ -139,6 +147,7 @@ assertMainBranch();
 assertTagAvailable(tag);
 
 run("npm", ["version", nextVersion, "--no-git-tag-version", "--ignore-scripts"]);
+updateSourceVersion(nextVersion);
 updateChangelogForRelease(nextVersion);
 
 run("npm", ["test"]);
@@ -149,7 +158,7 @@ run("npm", ["run", "release:assets"]);
 
 assertOnlyReleaseFilesChanged();
 
-run("git", ["add", "CHANGELOG.md", "package.json", "package-lock.json"]);
+run("git", ["add", "CHANGELOG.md", "package.json", "package-lock.json", "src/core/config.ts"]);
 run("git", ["commit", "-m", `release v${nextVersion}`]);
 run("git", ["tag", tag]);
 
