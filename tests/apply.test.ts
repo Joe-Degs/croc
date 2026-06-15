@@ -32,8 +32,8 @@ describe("applyConfig", () => {
 	it("fails before writing runtime files when a Headroom route conflicts with a Croc-local provider", () => {
 		const config = createDefaultConfig(tempDir);
 		config.pi.models.providers = {
-			hubtel: {
-				baseUrl: "https://llm.hubtel.example.invalid/v1",
+			"routed-openai": {
+				baseUrl: "https://private-llm.example.invalid/v1",
 				api: "openai-responses",
 			},
 		};
@@ -41,12 +41,12 @@ describe("applyConfig", () => {
 		config.batteries.headroom.proxy.mode = "external";
 		config.batteries.headroom.proxy.url = "http://127.0.0.1:18787";
 		config.batteries.headroom.routing.providers = {
-			hubtel: { target: "openai" },
+			"routed-openai": { target: "openai" },
 		};
 
 		assert.throws(
 			() => applyConfig(tempDir, config, join(tempDir, "croc.yaml")),
-			/Croc owns the Headroom route for provider "hubtel".*conflicts with the derived Headroom URL/,
+			/Croc owns the Headroom route for provider "routed-openai".*conflicts with the derived Headroom URL/,
 		);
 		assert.equal(existsSync(join(tempDir, ".pi", "settings.json")), false);
 		assert.equal(existsSync(join(tempDir, ".pi", "taskplane-config.json")), false);

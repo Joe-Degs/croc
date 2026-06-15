@@ -39,6 +39,7 @@ import {
 	type AgentHostOptions,
 	type AgentHostResult,
 } from "./agent-host.ts";
+import { createContextKillPolicy } from "./context-kill-policy.ts";
 import { loadPiSettingsResources, filterExcludedExtensions } from "./settings-loader.ts";
 
 import { appendAgentEvent, writeLaneSnapshot } from "./process-registry.ts";
@@ -72,6 +73,10 @@ import {
 } from "./types.ts";
 
 const LANE_RUNNER_DIR = dirname(fileURLToPath(import.meta.url));
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
 
 // ── Segment Scoping Helpers (Phase A, TP-174) ────────────────────────
 
@@ -314,6 +319,8 @@ export interface LaneRunnerConfig {
 	warnPercent: number;
 	/** Context pressure kill threshold (0-100) */
 	killPercent: number;
+	/** Compaction kill policy value from config; behavior is handled by future Runtime V2 work. */
+	compactionKillPolicy: "immediate" | "defer";
 	/** Optional callback for surfacing runtime mailbox replies/escalations to supervisor */
 	onSupervisorAlert?: SupervisorAlertCallback;
 	/**
@@ -1025,39 +1032,78 @@ export async function executeTaskV2(
 		// Context pressure: write wrap-up signal before kill
 		let workerKillReason: "context" | "timer" | null = null;
 		let iterationTelemetry: Partial<AgentHostResult> = {};
-
-		const spawned = spawnAgent(hostOpts, undefined, (telemetry) => {
-			try {
-				// Context pressure check
-				if (telemetry.contextUsage) {
-					const pct = telemetry.contextUsage.percent;
-					if (pct >= config.warnPercent) {
-						const msg = `Wrap up (context ${Math.round(pct)}%)`;
-						if (!existsSync(wrapUpFile)) writeFileSync(wrapUpFile, msg);
-					}
-					if (pct >= config.killPercent) {
-						workerKillReason = "context";
-						spawned.kill();
-					}
-				}
-
-				iterationTelemetry = telemetry;
-				lastTelemetry = telemetry;
-				// Emit lane snapshot
-				emitSnapshot(
-					config,
-					taskId,
-					segmentId,
-					"running",
-					telemetry,
-					statusPath,
-					reviewerStatePath,
-					snapshotSegmentCtx,
-				);
-			} catch {
-				/* non-fatal: telemetry callback must never crash the engine */
-			}
+		let spawned: ReturnType<typeof spawnAgent>;
+		let contextKillIssued = false;
+		const contextKillPolicy = createContextKillPolicy({
+			policy: config.compactionKillPolicy,
+			killPercent: config.killPercent,
+			onKill: () => {
+				if (contextKillIssued) return;
+				contextKillIssued = true;
+				workerKillReason = "context";
+				spawned.kill();
+			},
 		});
+
+		try {
+			spawned = spawnAgent(hostOpts, (event) => {
+				try {
+					if (event.type === "compaction_started") {
+						contextKillPolicy.observeAgentEvent({ type: "compaction_started" });
+						return;
+					}
+
+					if (event.type !== "compaction_finished") return;
+
+					const payload = event.payload;
+					const policyPayload: Record<string, unknown> = {};
+					if (isRecord(payload)) {
+						if ("success" in payload) policyPayload.success = payload.success;
+						if ("status" in payload) policyPayload.status = payload.status;
+						if ("willRetry" in payload) policyPayload.willRetry = payload.willRetry;
+						if ("aborted" in payload) policyPayload.aborted = payload.aborted;
+					}
+					contextKillPolicy.observeAgentEvent({ type: event.type, payload: policyPayload });
+				} catch {
+					/* non-fatal: event callback must never crash the agent host */
+				}
+			}, (telemetry) => {
+				try {
+					// Context pressure check
+					if (telemetry.contextUsage) {
+						const pct = telemetry.contextUsage.percent;
+						if (pct >= config.warnPercent) {
+							const msg = `Wrap up (context ${Math.round(pct)}%)`;
+							try {
+								if (!existsSync(wrapUpFile)) writeFileSync(wrapUpFile, msg);
+							} catch {
+								/* best effort: context kill policy must still observe this sample */
+							}
+						}
+						contextKillPolicy.observeContextPercent(pct);
+					}
+
+					iterationTelemetry = telemetry;
+					lastTelemetry = telemetry;
+					// Emit lane snapshot
+					emitSnapshot(
+						config,
+						taskId,
+						segmentId,
+						"running",
+						telemetry,
+						statusPath,
+						reviewerStatePath,
+						snapshotSegmentCtx,
+					);
+				} catch {
+					/* non-fatal: telemetry callback must never crash the engine */
+				}
+			});
+		} catch (error) {
+			contextKillPolicy.dispose();
+			throw error;
+		}
 
 		// Reviewer telemetry is written by the worker bridge during review_step.
 		// Poll snapshot refresh independently from worker message_end cadence so
@@ -1096,6 +1142,7 @@ export async function executeTaskV2(
 			workerResult = await spawned.promise;
 		} finally {
 			clearInterval(reviewerRefresh);
+			contextKillPolicy.dispose();
 		}
 
 		// TP-115: Update lastTelemetry with definitive final values from AgentHostResult

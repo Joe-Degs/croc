@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
-import { createDefaultConfig } from "../src/core/config.ts";
+import { createDefaultConfig, loadConfig } from "../src/core/config.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -56,11 +58,48 @@ describe("createDefaultConfig", () => {
 			},
 		});
 	});
+
+	it("sets the default taskplane compaction kill policy", () => {
+		const config = createDefaultConfig("/tmp/taskplane-demo");
+
+		assert.equal(config.taskplane.compactionKillPolicy, "immediate");
+	});
+});
+
+describe("loadConfig", () => {
+	it("rejects invalid taskplane compaction kill policy values", () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "croc-config-"));
+
+		try {
+			writeFileSync(
+				join(tempDir, "croc.json"),
+				JSON.stringify({ taskplane: { compactionKillPolicy: "eventual" } }),
+				"utf-8",
+			);
+
+			assert.throws(
+				() => loadConfig(tempDir),
+				/Invalid taskplane\.compactionKillPolicy "eventual"; expected "immediate" or "defer"\./,
+			);
+		} finally {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("croc schema", () => {
 	const headroomPath = ["$defs", "batteries", "properties", "headroom"];
+	const taskplanePath = ["$defs", "taskplane"];
 	const targetNames = ["openai", "anthropic", "gemini", "cloudcode"];
+
+	it("documents taskplane compaction kill policy values", () => {
+		const schema = readSchema();
+
+		assert.deepEqual(getPath(schema, [...taskplanePath, "properties", "compactionKillPolicy", "enum"]), [
+			"immediate",
+			"defer",
+		]);
+	});
 
 	it("documents the headroom config shape", () => {
 		const schema = readSchema();

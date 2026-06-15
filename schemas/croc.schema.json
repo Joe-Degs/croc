@@ -455,6 +455,7 @@
 				"maxWorkerMinutes": { "type": "integer", "minimum": 1 },
 				"stallTimeoutMinutes": { "type": "integer", "minimum": 1 },
 				"maxWorkerIterations": { "type": "integer", "minimum": 1 },
+				"compactionKillPolicy": { "type": "string", "enum": ["immediate", "defer"] },
 				"mergeVerify": { "type": "array", "items": { "type": "string" } },
 				"testingCommands": { "type": "object", "additionalProperties": { "type": "string" } },
 				"dashboard": {

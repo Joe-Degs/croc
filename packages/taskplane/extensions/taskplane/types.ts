@@ -346,6 +346,16 @@ export interface TaskArea {
 export interface TaskRunnerConfig {
 	task_areas: Record<string, TaskArea>;
 	reference_docs: Record<string, string>;
+	context?: {
+		worker_context_window: number;
+		warn_percent: number;
+		kill_percent: number;
+		max_worker_iterations: number;
+		max_review_cycles: number;
+		no_progress_limit: number;
+		max_worker_minutes?: number;
+		compaction_kill_policy: "immediate" | "defer";
+	};
 	/** Named testing/verification commands (e.g., { test: "node --test tests/*.test.ts" }). Used for baseline fingerprinting (TP-032). */
 	testing_commands?: Record<string, string>;
 	/**

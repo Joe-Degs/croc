@@ -2,6 +2,7 @@
 
 import { execFileSync, execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 
 const expectedPackageName = "croc";
 const requiredFiles = [
@@ -11,8 +12,8 @@ const requiredFiles = [
 	"examples/model-provider/croc.yaml",
 	"examples/rate-limiter-task-with-headroom/croc.yaml",
 ];
-const forbiddenTextPattern = /hubtel|grm-2\.6|llm\.hubtel|HUBTEL_LLM_API_KEY/i;
 const searxngUrlPattern = /https?:\/\/[^\s<>]*searxng(?!\.example\.invalid)/i;
+const localHomePaths = [...new Set([homedir(), homedir().replace(/\\/g, "/")].filter((path) => path && path !== "/"))];
 
 function readPackManifest() {
 	const output = execSync("npm pack --dry-run --ignore-scripts --json", { encoding: "utf8" });
@@ -52,19 +53,19 @@ try {
 const runNoteFiles = paths.filter((path) => path.startsWith("docs/runs/"));
 if (runNoteFiles.length > 0) failures.push(`package includes docs/runs files: ${runNoteFiles.join(", ")}`);
 
-const forbiddenFiles = [];
 const suspiciousSearxngUrlFiles = [];
+const localPathFiles = [];
 for (const path of paths) {
 	if (!existsSync(path)) continue;
 	const text = readTextFile(path);
-	if (forbiddenTextPattern.test(text)) forbiddenFiles.push(path);
 	if (searxngUrlPattern.test(text)) suspiciousSearxngUrlFiles.push(path);
+	if (localHomePaths.some((homePath) => text.includes(homePath))) localPathFiles.push(path);
 }
 
-if (forbiddenFiles.length > 0) failures.push(`package includes forbidden personal defaults in: ${forbiddenFiles.join(", ")}`);
 if (suspiciousSearxngUrlFiles.length > 0) {
 	failures.push(`package includes non-placeholder SearXNG URLs in: ${suspiciousSearxngUrlFiles.join(", ")}`);
 }
+if (localPathFiles.length > 0) failures.push(`package includes local machine paths in: ${localPathFiles.join(", ")}`);
 
 if (failures.length > 0) {
 	for (const failure of failures) console.error(`Package validation failed: ${failure}`);

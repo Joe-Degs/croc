@@ -1714,6 +1714,10 @@ async function attemptWorkerCrashRetry(
 					...buildReviewerEnv(runnerConfig?.reviewer),
 					...buildWorkerExcludeEnv(runnerConfig?.workerExcludeExtensions),
 				}, // TP-089: ensure mailbox works for retries
+				undefined,
+				undefined,
+				undefined,
+				runnerConfig?.context,
 			);
 
 			const retryOutcome = retryResult.tasks[0];
@@ -2039,6 +2043,10 @@ async function attemptModelFallbackRetry(
 				wsRoot,
 				isWsMode,
 				modelFallbackEnv,
+				undefined,
+				undefined,
+				undefined,
+				runnerConfig?.context,
 			);
 
 			const retryOutcome = retryResult.tasks[0];
@@ -2353,6 +2361,7 @@ async function attemptStaleWorktreeRecovery(
 		runnerConfig?.workerExcludeExtensions ?? [],
 		onLaneTerminated,
 		onLaneRespawned,
+		runnerConfig?.context,
 	);
 
 	return retryResult;
@@ -3123,6 +3132,7 @@ export async function executeOrchBatch(
 			runnerConfig?.workerExcludeExtensions ?? [],
 			emitLaneTerminated,
 			onLaneRespawned ?? undefined,
+			runnerConfig?.context,
 		);
 
 		// ── TP-039: Tier 0 — Stale worktree recovery ────────────
@@ -3277,7 +3287,7 @@ export async function executeOrchBatch(
 				allTaskOutcomes,
 				onNotify,
 				stateRoot,
-				undefined,
+				runnerConfig,
 				selectedBackend,
 			);
 			if (retryOutcome.succeededRetries.length > 0) {

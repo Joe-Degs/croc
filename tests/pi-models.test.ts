@@ -66,27 +66,27 @@ describe("Pi model provider configuration", () => {
 	});
 
 	it("routes inline providers while preserving Croc-local metadata", () => {
-		const config = createHeadroomConfig(tempDir, { hubtel: "openai" });
+		const config = createHeadroomConfig(tempDir, { "routed-openai": "openai" });
 		config.pi.models.providers = {
-			hubtel: {
+			"routed-openai": {
 				api: "openai-responses",
-				apiKey: "$HUBTEL_API_KEY",
-				headers: { authorization: "Bearer $HUBTEL_API_KEY" },
+				apiKey: "$ROUTED_OPENAI_API_KEY",
+				headers: { authorization: "Bearer $ROUTED_OPENAI_API_KEY" },
 				authHeader: true,
-				models: [{ id: "hubtel-chat" }],
-				modelOverrides: { "hubtel-chat": { contextWindow: 128000 } },
+				models: [{ id: "routed-chat" }],
+				modelOverrides: { "routed-chat": { contextWindow: 128000 } },
 			},
 		};
 
-		const provider = providerRecord(getConfiguredPiProviders(config, join(tempDir, "croc.yaml")), "hubtel");
+		const provider = providerRecord(getConfiguredPiProviders(config, join(tempDir, "croc.yaml")), "routed-openai");
 
 		assert.equal(provider.baseUrl, "http://127.0.0.1:18787/v1");
 		assert.equal(provider.api, "openai-responses");
-		assert.equal(provider.apiKey, "$HUBTEL_API_KEY");
-		assert.deepEqual(provider.headers, { authorization: "Bearer $HUBTEL_API_KEY" });
+		assert.equal(provider.apiKey, "$ROUTED_OPENAI_API_KEY");
+		assert.deepEqual(provider.headers, { authorization: "Bearer $ROUTED_OPENAI_API_KEY" });
 		assert.equal(provider.authHeader, true);
-		assert.deepEqual(provider.models, [{ id: "hubtel-chat" }]);
-		assert.deepEqual(provider.modelOverrides, { "hubtel-chat": { contextWindow: 128000 } });
+		assert.deepEqual(provider.models, [{ id: "routed-chat" }]);
+		assert.deepEqual(provider.modelOverrides, { "routed-chat": { contextWindow: 128000 } });
 	});
 
 	it("routes providers loaded from pi.models.file", () => {
@@ -114,24 +114,24 @@ describe("Pi model provider configuration", () => {
 	});
 
 	it("accepts explicit routed base URLs that only differ by trailing slash", () => {
-		const config = createHeadroomConfig(tempDir, { hubtel: "openai" });
+		const config = createHeadroomConfig(tempDir, { "routed-openai": "openai" });
 		config.pi.models.providers = {
-			hubtel: {
+			"routed-openai": {
 				baseUrl: "http://127.0.0.1:18787/v1/",
 				api: "openai-responses",
 			},
 		};
 
-		const provider = providerRecord(getConfiguredPiProviders(config, join(tempDir, "croc.yaml")), "hubtel");
+		const provider = providerRecord(getConfiguredPiProviders(config, join(tempDir, "croc.yaml")), "routed-openai");
 
 		assert.equal(provider.baseUrl, "http://127.0.0.1:18787/v1");
 		assert.equal(provider.api, "openai-responses");
 	});
 
 	it("rejects conflicting Croc-local routed base URLs without leaking URLs", () => {
-		const config = createHeadroomConfig(tempDir, { hubtel: "openai" });
+		const config = createHeadroomConfig(tempDir, { "routed-openai": "openai" });
 		config.pi.models.providers = {
-			hubtel: {
+			"routed-openai": {
 				baseUrl: "https://token@example.invalid/v1?key=super-secret",
 				api: "openai-responses",
 			},
@@ -141,7 +141,7 @@ describe("Pi model provider configuration", () => {
 			() => getConfiguredPiProviders(config, join(tempDir, "croc.yaml")),
 			(error: unknown) => {
 				assert.ok(error instanceof Error);
-				assert.match(error.message, /Croc owns the Headroom route for provider "hubtel"/);
+				assert.match(error.message, /Croc owns the Headroom route for provider "routed-openai"/);
 				assert.match(error.message, /conflicts with the derived Headroom URL/);
 				assert.doesNotMatch(error.message, /super-secret|token@example|example\.invalid|127\.0\.0\.1:18787/);
 				return true;

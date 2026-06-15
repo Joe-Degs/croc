@@ -44,6 +44,7 @@ import type {
 	WorkspaceSectionConfig,
 	GlobalPreferences,
 	DeepPartial,
+	CompactionKillPolicy,
 } from "./config-schema.ts";
 
 // ── Error Types ──────────────────────────────────────────────────────
@@ -55,12 +56,14 @@ import type {
  * - CONFIG_VERSION_UNSUPPORTED: configVersion is not supported by this version
  * - CONFIG_VERSION_MISSING: configVersion field is missing from JSON
  * - CONFIG_LEGACY_FIELD: removed TMUX-era field/value detected; migration required
+ * - CONFIG_VALIDATION_ERROR: merged config has an invalid runtime value
  */
 export type ConfigLoadErrorCode =
 	| "CONFIG_JSON_MALFORMED"
 	| "CONFIG_VERSION_UNSUPPORTED"
 	| "CONFIG_VERSION_MISSING"
-	| "CONFIG_LEGACY_FIELD";
+	| "CONFIG_LEGACY_FIELD"
+	| "CONFIG_VALIDATION_ERROR";
 
 export class ConfigLoadError extends Error {
 	code: ConfigLoadErrorCode;
@@ -137,6 +140,104 @@ function normalizeInheritanceAliases(config: TaskplaneConfig): void {
 	normalizeField(config.orchestrator.merge as Record<string, any>, "thinking");
 	normalizeField(config.orchestrator.supervisor as Record<string, any>, "model");
 	normalizeField(config.taskRunner.qualityGate as Record<string, any>, "reviewModel");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isCompactionKillPolicy(value: unknown): value is CompactionKillPolicy {
+	return value === "immediate" || value === "defer";
+}
+
+function formatConfigValue(value: unknown): string {
+	if (typeof value === "string") return JSON.stringify(value);
+	if (typeof value === "number" || typeof value === "boolean" || value == null) return String(value);
+	try {
+		return JSON.stringify(value) ?? String(value);
+	} catch {
+		return String(value);
+	}
+}
+
+function throwConfigValidationError(field: string, value: unknown, expected: string): never {
+	throw new ConfigLoadError(
+		"CONFIG_VALIDATION_ERROR",
+		`Invalid config value for ${field}: ${formatConfigValue(value)}. ${expected}.`,
+	);
+}
+
+function requireFiniteNumber(field: string, value: unknown): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		throwConfigValidationError(field, value, "Expected a finite number");
+	}
+	return value;
+}
+
+function requirePercent(field: string, value: unknown): number {
+	const percent = requireFiniteNumber(field, value);
+	if (percent <= 0 || percent > 100) {
+		throwConfigValidationError(field, value, "Expected a number greater than 0 and less than or equal to 100");
+	}
+	return percent;
+}
+
+function requirePositiveInteger(field: string, value: unknown): void {
+	const integer = requireFiniteNumber(field, value);
+	if (!Number.isInteger(integer) || integer < 1) {
+		throwConfigValidationError(field, value, "Expected a positive integer");
+	}
+}
+
+function requirePositiveNumber(field: string, value: unknown): void {
+	const numberValue = requireFiniteNumber(field, value);
+	if (numberValue <= 0) {
+		throwConfigValidationError(field, value, "Expected a positive number");
+	}
+}
+
+function requireNonNegativeInteger(field: string, value: unknown): void {
+	const integer = requireFiniteNumber(field, value);
+	if (!Number.isInteger(integer) || integer < 0) {
+		throwConfigValidationError(field, value, "Expected a non-negative integer");
+	}
+}
+
+function validateContextConfig(config: TaskplaneConfig): void {
+	const context: unknown = config.taskRunner.context;
+	if (!isRecord(context)) {
+		throwConfigValidationError("taskRunner.context", context, "Expected an object");
+	}
+
+	if (!isCompactionKillPolicy(context.compactionKillPolicy)) {
+		throwConfigValidationError(
+			"taskRunner.context.compactionKillPolicy",
+			context.compactionKillPolicy,
+			'Expected "immediate" or "defer"',
+		);
+	}
+
+	requireNonNegativeInteger("taskRunner.context.workerContextWindow", context.workerContextWindow);
+	const warnPercent = requirePercent("taskRunner.context.warnPercent", context.warnPercent);
+	const killPercent = requirePercent("taskRunner.context.killPercent", context.killPercent);
+	if (warnPercent >= killPercent) {
+		throwConfigValidationError(
+			"taskRunner.context.warnPercent",
+			warnPercent,
+			"Expected warnPercent to be less than killPercent",
+		);
+	}
+
+	requirePositiveInteger("taskRunner.context.maxWorkerIterations", context.maxWorkerIterations);
+	requirePositiveInteger("taskRunner.context.maxReviewCycles", context.maxReviewCycles);
+	requirePositiveInteger("taskRunner.context.noProgressLimit", context.noProgressLimit);
+	if (context.maxWorkerMinutes !== undefined) {
+		requirePositiveNumber("taskRunner.context.maxWorkerMinutes", context.maxWorkerMinutes);
+	}
+}
+
+function validateProjectConfig(config: TaskplaneConfig): void {
+	validateContextConfig(config);
 }
 
 // throwLegacyFieldError removed — replaced by auto-migration functions that fix config in-place
@@ -1139,6 +1240,7 @@ export function loadProjectConfig(cwd: string, pointerConfigRoot?: string): Task
 	mergeProjectOverrides(config, overrides);
 
 	normalizeInheritanceAliases(config);
+	validateProjectConfig(config);
 	return config;
 }
 
@@ -1157,6 +1259,7 @@ export function loadLayer1Config(cwd: string, pointerConfigRoot?: string): Taskp
 	mergeProjectOverrides(config, overrides);
 
 	normalizeInheritanceAliases(config);
+	validateProjectConfig(config);
 	return config;
 }
 
@@ -1239,9 +1342,10 @@ export function toOrchestratorConfig(
  * and non-empty values are trimmed — matching the original YAML loader behavior.
  */
 export function toTaskRunnerConfig(config: TaskplaneConfig): import("./types.ts").TaskRunnerConfig {
+	const tr = config.taskRunner;
 	// task_areas needs snake_case keys inside each area too (repoId → repo_id)
 	const taskAreas: Record<string, import("./types.ts").TaskArea> = {};
-	for (const [name, area] of Object.entries(config.taskRunner.taskAreas)) {
+	for (const [name, area] of Object.entries(tr.taskAreas)) {
 		const ta: import("./types.ts").TaskArea = {
 			path: area.path,
 			prefix: area.prefix,
@@ -1256,27 +1360,37 @@ export function toTaskRunnerConfig(config: TaskplaneConfig): import("./types.ts"
 
 	// Include testing_commands for baseline fingerprinting (TP-032).
 	// Only set the field when there are actual commands configured.
-	const testingCommands = config.taskRunner.testing?.commands;
+	const testingCommands = tr.testing?.commands;
 	const hasTestingCommands = testingCommands && Object.keys(testingCommands).length > 0;
 
 	return {
 		task_areas: taskAreas,
-		reference_docs: { ...config.taskRunner.referenceDocs },
+		reference_docs: { ...tr.referenceDocs },
+		context: {
+			worker_context_window: tr.context.workerContextWindow,
+			warn_percent: tr.context.warnPercent,
+			kill_percent: tr.context.killPercent,
+			max_worker_iterations: tr.context.maxWorkerIterations,
+			max_review_cycles: tr.context.maxReviewCycles,
+			no_progress_limit: tr.context.noProgressLimit,
+			max_worker_minutes: tr.context.maxWorkerMinutes,
+			compaction_kill_policy: tr.context.compactionKillPolicy,
+		},
 		...(hasTestingCommands ? { testing_commands: { ...testingCommands } } : {}),
 		worker: {
-			model: config.taskRunner.worker.model,
-			thinking: config.taskRunner.worker.thinking,
-			tools: config.taskRunner.worker.tools,
-			excludeExtensions: [...(config.taskRunner.worker.excludeExtensions ?? [])],
+			model: tr.worker.model,
+			thinking: tr.worker.thinking,
+			tools: tr.worker.tools,
+			excludeExtensions: [...(tr.worker.excludeExtensions ?? [])],
 		},
-		model_fallback: config.taskRunner.modelFallback ?? "inherit",
+		model_fallback: tr.modelFallback ?? "inherit",
 		reviewer: {
-			model: config.taskRunner.reviewer.model,
-			thinking: config.taskRunner.reviewer.thinking,
-			tools: config.taskRunner.reviewer.tools,
-			excludeExtensions: [...(config.taskRunner.reviewer.excludeExtensions ?? [])],
+			model: tr.reviewer.model,
+			thinking: tr.reviewer.thinking,
+			tools: tr.reviewer.tools,
+			excludeExtensions: [...(tr.reviewer.excludeExtensions ?? [])],
 		},
-		workerExcludeExtensions: [...(config.taskRunner.worker.excludeExtensions ?? [])],
+		workerExcludeExtensions: [...(tr.worker.excludeExtensions ?? [])],
 	};
 }
 
@@ -1303,6 +1417,7 @@ export function toTaskConfig(config: TaskplaneConfig): {
 		max_review_cycles: number;
 		no_progress_limit: number;
 		max_worker_minutes?: number;
+		compaction_kill_policy: "immediate" | "defer";
 	};
 	quality_gate: {
 		enabled: boolean;
@@ -1349,6 +1464,7 @@ export function toTaskConfig(config: TaskplaneConfig): {
 			max_review_cycles: tr.context.maxReviewCycles,
 			no_progress_limit: tr.context.noProgressLimit,
 			max_worker_minutes: tr.context.maxWorkerMinutes,
+			compaction_kill_policy: tr.context.compactionKillPolicy,
 		},
 		quality_gate: {
 			enabled: tr.qualityGate.enabled,
@@ -1404,7 +1520,10 @@ export function loadConfig(cwd: string): ReturnType<typeof toTaskConfig> {
 		const unified = loadProjectConfig(cwd, pointer?.configRoot);
 		return toTaskConfig(unified);
 	} catch (err: unknown) {
-		if (err instanceof ConfigLoadError && err.code === "CONFIG_LEGACY_FIELD") {
+		if (
+			err instanceof ConfigLoadError &&
+			(err.code === "CONFIG_LEGACY_FIELD" || err.code === "CONFIG_VALIDATION_ERROR")
+		) {
 			throw err;
 		}
 		return toTaskConfig(deepClone(DEFAULT_PROJECT_CONFIG));

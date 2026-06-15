@@ -432,6 +432,26 @@ describe("11. validateFieldInput", () => {
 			expect(result.valid).toBe(false);
 			expect(result.error).toContain("Must be one of");
 		});
+
+		it("11.2.4 accepts compaction kill policy enum values", () => {
+			const field = SECTIONS.flatMap((section) => section.fields).find(
+				(f) => f.configPath === "taskRunner.context.compactionKillPolicy",
+			);
+			expect(field).toBeDefined();
+			expect(validateFieldInput(field!, "immediate").valid).toBe(true);
+			expect(validateFieldInput(field!, "defer").valid).toBe(true);
+		});
+
+		it("11.2.5 rejects invalid compaction kill policy enum values", () => {
+			const field = SECTIONS.flatMap((section) => section.fields).find(
+				(f) => f.configPath === "taskRunner.context.compactionKillPolicy",
+			);
+			expect(field).toBeDefined();
+
+			const result = validateFieldInput(field!, "later");
+			expect(result.valid).toBe(false);
+			expect(result.error).toContain("immediate, defer");
+		});
 	});
 
 	// 11.3 — String validation
@@ -562,6 +582,21 @@ describe("12. SECTIONS schema coverage", () => {
 		expect(mergeThinking!.layer).toBe("L1+L2");
 		expect(mergeThinking!.prefsKey).toBe("mergeThinking");
 		expect(getDefaultWriteDestination(mergeThinking!)).toBe("prefs");
+	});
+
+	it("12.9 Context Limits exposes compaction kill policy picker", () => {
+		const contextLimits = SECTIONS.find((section) => section.name === "Context Limits");
+		expect(contextLimits).toBeDefined();
+
+		const field = contextLimits!.fields.find(
+			(f) => f.configPath === "taskRunner.context.compactionKillPolicy",
+		);
+		expect(field).toBeDefined();
+		expect(field!.label).toBe("Compaction Kill Policy");
+		expect(field!.control).toBe("picker");
+		expect(field!.fieldType).toBe("enum");
+		expect(field!.layer).toBe("L1");
+		expect(field!.values).toEqual(["immediate", "defer"]);
 	});
 });
 
@@ -1666,6 +1701,16 @@ describe("18. Advanced section discoverability", () => {
 				expect(advancedPaths.has(field.configPath)).toBe(false);
 			}
 		}
+	});
+
+	it("18.9 Advanced excludes compaction kill policy", () => {
+		const config = cloneConfig();
+		Object.assign(config.taskRunner.context, { compactionKillPolicy: "immediate" });
+
+		const items = getAdvancedItems(config);
+		const paths = items.map((i) => i.configPath);
+
+		expect(paths).not.toContain("taskRunner.context.compactionKillPolicy");
 	});
 });
 

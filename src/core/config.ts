@@ -17,6 +17,7 @@ export type SupervisorAutonomy = "interactive" | "supervised" | "autonomous";
 export type WorkOverwrite = "never" | "if-generated" | "always";
 export type TaskSize = "S" | "M" | "L";
 export type WorkspaceRepoMode = "create" | "clone" | "attach";
+export type CompactionKillPolicy = "immediate" | "defer";
 
 export type CrocPiProviderConfig = Parameters<ExtensionAPI["registerProvider"]>[1] | Record<string, unknown>;
 
@@ -96,6 +97,7 @@ export interface CrocTaskplaneConfig {
 	maxWorkerMinutes: number;
 	stallTimeoutMinutes: number;
 	maxWorkerIterations: number;
+	compactionKillPolicy: CompactionKillPolicy;
 	mergeVerify: string[];
 	testingCommands: Record<string, string>;
 	dashboard: {
@@ -283,6 +285,7 @@ export function createDefaultConfig(cwd: string): CrocConfig {
 			maxWorkerMinutes: 1440,
 			stallTimeoutMinutes: 120,
 			maxWorkerIterations: 50,
+			compactionKillPolicy: "immediate",
 			mergeVerify: [],
 			testingCommands: {},
 			dashboard: {
@@ -359,6 +362,18 @@ export function hasConfiguredPiModels(config: Pick<CrocConfig, "pi">): boolean {
 	return config.pi.models.file.length > 0 || Object.keys(config.pi.models.providers).length > 0;
 }
 
+function isCompactionKillPolicy(value: unknown): value is CompactionKillPolicy {
+	return value === "immediate" || value === "defer";
+}
+
+function validateConfig(config: CrocConfig): void {
+	if (!isCompactionKillPolicy(config.taskplane.compactionKillPolicy)) {
+		throw new Error(
+			`Invalid taskplane.compactionKillPolicy ${JSON.stringify(config.taskplane.compactionKillPolicy)}; expected "immediate" or "defer".`,
+		);
+	}
+}
+
 export function getConfigPath(cwd: string, explicitPath?: string): string {
 	if (explicitPath) return resolve(explicitPath);
 	return findConfigPath(cwd) ?? join(resolve(cwd), "croc.yaml");
@@ -383,6 +398,7 @@ export function loadConfig(cwd: string, explicitPath?: string): LoadedConfig {
 	if (config.configVersion !== CROC_CONFIG_VERSION) {
 		throw new Error(`Unsupported Croc config version ${config.configVersion}; expected ${CROC_CONFIG_VERSION}.`);
 	}
+	validateConfig(config);
 	return { path, config };
 }
 

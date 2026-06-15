@@ -10,12 +10,21 @@
  * Run: node --experimental-strip-types --experimental-test-module-mocks --no-warnings --import ./tests/loader.mjs --test tests/lane-runner-v2.test.ts
  */
 
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import { expect } from "./expect.ts";
-import { readFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { join, dirname } from "path";
 import { tmpdir } from "os";
 import { fileURLToPath } from "url";
+import type {
+	AgentEventCallback,
+	AgentHostOptions,
+	AgentHostResult,
+	AgentTelemetryCallback,
+} from "../taskplane/agent-host.ts";
+import type { LaneRunnerConfig } from "../taskplane/lane-runner.ts";
+import type { ExecutionUnit, RuntimeAgentEvent, RuntimeAgentEventType } from "../taskplane/types.ts";
+import { CONTEXT_KILL_COMPACTION_GRACE_MS } from "../taskplane/context-kill-policy.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -25,6 +34,160 @@ const agentBridgeSrc = readFileSync(
 	join(__dirname, "..", "taskplane", "agent-bridge-extension.ts"),
 	"utf-8",
 );
+
+const realAgentHost = await import("../taskplane/agent-host.ts");
+
+interface MockSpawnRecord {
+	hostOpts: AgentHostOptions;
+	killCount: number;
+}
+
+interface MockSpawnContext {
+	hostOpts: AgentHostOptions;
+	onEvent: AgentEventCallback | undefined;
+	onTelemetry: AgentTelemetryCallback | undefined;
+	completeStatus: () => void;
+	resolve: (result: AgentHostResult) => void;
+}
+
+type MockSpawnScript = (context: MockSpawnContext) => void;
+
+interface CapturedTimeout {
+	id: number;
+	callback: () => void;
+	ms: number;
+	active: boolean;
+}
+
+async function withCapturedTimeouts<T>(fn: (timers: CapturedTimeout[]) => Promise<T>): Promise<T> {
+	const originalSetTimeout = globalThis.setTimeout;
+	const originalClearTimeout = globalThis.clearTimeout;
+	const timers: CapturedTimeout[] = [];
+	let nextId = 1;
+
+	globalThis.setTimeout = ((callback: () => void, ms?: number) => {
+		const timer = { id: nextId++, callback, ms: ms ?? 0, active: true };
+		timers.push(timer);
+		return timer;
+	}) as unknown as typeof setTimeout;
+	globalThis.clearTimeout = ((handle: unknown) => {
+		if (typeof handle === "object" && handle !== null && "active" in handle) {
+			(handle as CapturedTimeout).active = false;
+		}
+	}) as unknown as typeof clearTimeout;
+
+	try {
+		return await fn(timers);
+	} finally {
+		globalThis.setTimeout = originalSetTimeout;
+		globalThis.clearTimeout = originalClearTimeout;
+	}
+}
+
+let mockSpawnRecords: MockSpawnRecord[] = [];
+let mockSpawnScript: MockSpawnScript | null = null;
+
+function defaultAgentResult(overrides: Partial<AgentHostResult> = {}): AgentHostResult {
+	return {
+		exitCode: 0,
+		signal: null,
+		durationMs: 1,
+		killed: false,
+		inputTokens: 0,
+		outputTokens: 0,
+		cacheReadTokens: 0,
+		cacheWriteTokens: 0,
+		costUsd: 0,
+		toolCalls: 0,
+		lastTool: "",
+		retries: 0,
+		compactions: 0,
+		compactionsStarted: 0,
+		compactionsCompleted: 0,
+		compactionEvents: [],
+		contextUsage: null,
+		error: null,
+		agentEnded: true,
+		stderrTail: "",
+		...overrides,
+	};
+}
+
+function runtimeEvent(
+	hostOpts: AgentHostOptions,
+	type: RuntimeAgentEventType,
+	payload: Record<string, unknown> = {},
+): RuntimeAgentEvent {
+	return {
+		seq: 1,
+		batchId: hostOpts.batchId,
+		agentId: hostOpts.agentId,
+		role: hostOpts.role,
+		laneNumber: hostOpts.laneNumber,
+		taskId: hostOpts.taskId,
+		repoId: hostOpts.repoId,
+		ts: Date.now(),
+		type,
+		payload,
+	};
+}
+
+function completeStatusFromHostOptions(hostOpts: AgentHostOptions): void {
+	const statusPath = hostOpts.env?.TASKPLANE_STATUS_PATH;
+	if (!statusPath) return;
+	const content = readFileSync(statusPath, "utf-8");
+	writeFileSync(statusPath, content.replace(/- \[ \]/g, "- [x]"));
+}
+
+const mockSpawnAgent = mock.fn(
+	(
+		hostOpts: AgentHostOptions,
+		onEvent?: AgentEventCallback,
+		onTelemetry?: AgentTelemetryCallback,
+	): ReturnType<typeof realAgentHost.spawnAgent> => {
+		const record: MockSpawnRecord = { hostOpts, killCount: 0 };
+		mockSpawnRecords.push(record);
+
+		const promise = new Promise<AgentHostResult>((resolve, reject) => {
+			queueMicrotask(() => {
+				try {
+					const context: MockSpawnContext = {
+						hostOpts,
+						onEvent,
+						onTelemetry,
+						completeStatus: () => completeStatusFromHostOptions(hostOpts),
+						resolve,
+					};
+					if (mockSpawnScript) {
+						mockSpawnScript(context);
+						return;
+					}
+
+					context.completeStatus();
+					resolve(defaultAgentResult());
+				} catch (error) {
+					reject(error);
+				}
+			});
+		});
+
+		return {
+			promise,
+			kill: () => {
+				record.killCount++;
+			},
+		};
+	},
+);
+
+mock.module("../taskplane/agent-host.ts", {
+	namedExports: {
+		...realAgentHost,
+		spawnAgent: mockSpawnAgent,
+	},
+});
+
+const laneRunnerRuntime = await import("../taskplane/lane-runner.ts");
 
 // ── 1. Lane-runner module structure ─────────────────────────────────
 
@@ -143,6 +306,27 @@ describe("2.x: Lane-runner execution contract", () => {
 	it("2.13: empty thinking is forwarded as undefined to inherit session defaults", () => {
 		expect(laneRunnerSrc).toContain("thinking: config.workerThinking || undefined");
 	});
+
+	it("2.14: wires context kill policy into worker iterations", () => {
+		expect(laneRunnerSrc).toContain('import { createContextKillPolicy } from "./context-kill-policy.ts"');
+		expect(laneRunnerSrc).toContain("const contextKillPolicy = createContextKillPolicy({");
+		expect(laneRunnerSrc).toContain("policy: config.compactionKillPolicy");
+		expect(laneRunnerSrc).toContain("killPercent: config.killPercent");
+		expect(laneRunnerSrc).toContain("contextKillPolicy.observeContextPercent(pct)");
+		expect(laneRunnerSrc).toContain("contextKillPolicy.dispose()");
+		expect(laneRunnerSrc).not.toContain("if (pct >= config.killPercent)");
+	});
+
+	it("2.15: passes normalized compaction events to the context kill policy", () => {
+		expect(laneRunnerSrc).toContain("spawnAgent(hostOpts, (event) =>");
+		expect(laneRunnerSrc).toContain('event.type === "compaction_started"');
+		expect(laneRunnerSrc).toContain('event.type !== "compaction_finished"');
+		expect(laneRunnerSrc).toContain("policyPayload.success = payload.success");
+		expect(laneRunnerSrc).toContain("policyPayload.status = payload.status");
+		expect(laneRunnerSrc).toContain("policyPayload.willRetry = payload.willRetry");
+		expect(laneRunnerSrc).toContain("policyPayload.aborted = payload.aborted");
+		expect(laneRunnerSrc).toContain("event callback must never crash the agent host");
+	});
 });
 
 // ── 3. executeLaneV2 integration ────────────────────────────────────
@@ -242,6 +426,20 @@ describe("3.x: executeLaneV2 integration in execution.ts", () => {
 		expect(mergeSrc).toContain("compactionsStarted: tel.compactionsStarted");
 		expect(mergeSrc).toContain("compactionsCompleted: tel.compactionsCompleted");
 	});
+
+	it("3.13: executeLaneV2 builds LaneRunnerConfig from Runtime V2 context config", () => {
+		expect(executionSrc).toContain('contextConfig?: TaskRunnerConfig["context"]');
+		expect(executionSrc).toContain("maxIterations: contextConfig?.max_worker_iterations ?? 20");
+		expect(executionSrc).toContain("noProgressLimit: contextConfig?.no_progress_limit ?? 3");
+		expect(executionSrc).toContain(
+			"maxWorkerMinutes: contextConfig?.max_worker_minutes ?? config.failure?.max_worker_minutes ?? 120",
+		);
+		expect(executionSrc).toContain("warnPercent: contextConfig?.warn_percent ?? 85");
+		expect(executionSrc).toContain("killPercent: contextConfig?.kill_percent ?? 95");
+		expect(executionSrc).toContain(
+			'compactionKillPolicy: contextConfig?.compaction_kill_policy ?? "immediate"',
+		);
+	});
 });
 
 // ── 4. No TMUX dependency in the V2 path ────────────────────────────
@@ -300,6 +498,7 @@ describe("5.x: LaneRunnerConfig fields", () => {
 	it("5.5: includes context pressure fields", () => {
 		expect(laneRunnerSrc).toContain("warnPercent: number");
 		expect(laneRunnerSrc).toContain("killPercent: number");
+		expect(laneRunnerSrc).toContain('compactionKillPolicy: "immediate" | "defer"');
 	});
 
 	it("5.6: includes stateRoot for runtime artifacts", () => {
@@ -397,5 +596,258 @@ describe("8.x: Multi-segment .DONE timing (TP-145)", () => {
 		expect(laneRunnerSrc).toContain("segmentId != null");
 		// The logical expression evaluates to false when segmentId is null
 		expect(laneRunnerSrc).toContainNormalized("const isNonFinalSegment = segmentId != null");
+	});
+});
+
+function resetMockSpawn(): void {
+	mockSpawnRecords = [];
+	mockSpawnScript = null;
+	mockSpawnAgent.mock.resetCalls();
+}
+
+function createPolicyFixture(compactionKillPolicy: LaneRunnerConfig["compactionKillPolicy"]): {
+	tmpRoot: string;
+	unit: ExecutionUnit;
+	config: LaneRunnerConfig;
+} {
+	const tmpRoot = mkdtempSync(join(tmpdir(), "lane-runner-policy-"));
+	const worktreePath = join(tmpRoot, "worktree");
+	const taskFolder = join(worktreePath, "taskplane-tasks", "TP-999");
+	mkdirSync(taskFolder, { recursive: true });
+	mkdirSync(join(taskFolder, ".reviews"), { recursive: true });
+	mkdirSync(join(tmpRoot, ".pi"), { recursive: true });
+
+	const promptPath = join(taskFolder, "PROMPT.md");
+	writeFileSync(
+		promptPath,
+		`# TP-999: Context policy fixture
+
+**Size:** S
+
+## Review Level: 0
+
+### Step 1: Finish work
+- [ ] complete the policy wiring check
+`,
+	);
+
+	const packet = {
+		promptPath,
+		statusPath: join(taskFolder, "STATUS.md"),
+		donePath: join(taskFolder, ".DONE"),
+		reviewsDir: join(taskFolder, ".reviews"),
+		taskFolder,
+	};
+
+	const unit: ExecutionUnit = {
+		id: "TP-999",
+		taskId: "TP-999",
+		segmentId: null,
+		executionRepoId: "repo",
+		packetHomeRepoId: "repo",
+		worktreePath,
+		packet,
+		task: {
+			taskId: "TP-999",
+			taskName: "Context policy fixture",
+			reviewLevel: 0,
+			size: "S",
+			dependencies: [],
+			fileScope: [],
+			taskFolder,
+			promptPath,
+			areaName: "test",
+			status: "pending",
+			segmentIds: [],
+			activeSegmentId: null,
+		},
+	};
+
+	const config: LaneRunnerConfig = {
+		batchId: "policy-test-batch",
+		agentIdPrefix: "orch-test",
+		laneNumber: 1,
+		worktreePath,
+		branch: "test-branch",
+		repoId: "repo",
+		stateRoot: tmpRoot,
+		workerModel: "",
+		workerTools: "",
+		workerThinking: "",
+		workerSystemPrompt: "worker system prompt",
+		workerSegmentPrompt: "",
+		reviewerModel: "",
+		reviewerThinking: "",
+		reviewerTools: "",
+		maxIterations: 1,
+		noProgressLimit: 1,
+		maxWorkerMinutes: 1,
+		warnPercent: 80,
+		killPercent: 95,
+		compactionKillPolicy,
+	};
+
+	return { tmpRoot, unit, config };
+}
+
+async function runPolicyFixture(
+	compactionKillPolicy: LaneRunnerConfig["compactionKillPolicy"],
+	spawnScript: MockSpawnScript,
+): Promise<{ result: Awaited<ReturnType<typeof laneRunnerRuntime.executeTaskV2>>; records: MockSpawnRecord[] }> {
+	resetMockSpawn();
+	mockSpawnScript = spawnScript;
+	const fixture = createPolicyFixture(compactionKillPolicy);
+	try {
+		const result = await laneRunnerRuntime.executeTaskV2(fixture.unit, fixture.config, { paused: false });
+		return { result, records: [...mockSpawnRecords] };
+	} finally {
+		rmSync(fixture.tmpRoot, { recursive: true, force: true });
+		resetMockSpawn();
+	}
+}
+
+// ── 9. Context kill policy runtime integration ──────────────────────
+
+describe("9.x: Context kill policy integration", () => {
+	it("9.1: deferred policy does not hard-kill immediately when compaction starts", async () => {
+		const { result, records } = await withCapturedTimeouts((timers) =>
+			runPolicyFixture("defer", (spawn) => {
+				spawn.onTelemetry?.({
+					contextUsage: { tokens: 96, contextWindow: 100, percent: 96 },
+				});
+				spawn.onEvent?.(runtimeEvent(spawn.hostOpts, "compaction_started"));
+				expect(timers.filter((timer) => timer.active).map((timer) => timer.ms)).toEqual([
+					CONTEXT_KILL_COMPACTION_GRACE_MS,
+				]);
+				spawn.completeStatus();
+				spawn.resolve(
+					defaultAgentResult({
+						contextUsage: { tokens: 96, contextWindow: 100, percent: 96 },
+						compactions: 1,
+						compactionsStarted: 1,
+						compactionEvents: [{ phase: "started" }],
+					}),
+				);
+			}),
+		);
+
+		expect(result.outcome.status).toBe("succeeded");
+		expect(records).toHaveLength(1);
+		expect(records[0].killCount).toBe(0);
+	});
+
+	it("9.2: successful compaction finish metadata clears deferred context kill", async () => {
+		const { records } = await runPolicyFixture("defer", (spawn) => {
+			spawn.onTelemetry?.({
+				contextUsage: { tokens: 96, contextWindow: 100, percent: 96 },
+			});
+			spawn.onEvent?.(runtimeEvent(spawn.hostOpts, "compaction_started"));
+			spawn.onEvent?.(
+				runtimeEvent(spawn.hostOpts, "compaction_finished", {
+					success: true,
+					status: "completed",
+					willRetry: false,
+					aborted: false,
+				}),
+			);
+			spawn.onEvent?.(
+				runtimeEvent(spawn.hostOpts, "compaction_finished", {
+					success: false,
+					status: "failed",
+					willRetry: false,
+					aborted: false,
+				}),
+			);
+			spawn.completeStatus();
+			spawn.resolve(
+				defaultAgentResult({
+					contextUsage: { tokens: 96, contextWindow: 100, percent: 96 },
+					compactions: 1,
+					compactionsStarted: 1,
+					compactionsCompleted: 1,
+					compactionEvents: [
+						{ phase: "started" },
+						{ phase: "ended", success: true, status: "completed", willRetry: false, aborted: false },
+					],
+				}),
+			);
+		});
+
+		expect(records).toHaveLength(1);
+		expect(records[0].killCount).toBe(0);
+	});
+
+	it("9.3: immediate policy keeps the existing context kill behavior", async () => {
+		const { records } = await runPolicyFixture("immediate", (spawn) => {
+			spawn.onTelemetry?.({
+				contextUsage: { tokens: 96, contextWindow: 100, percent: 96 },
+			});
+			spawn.onTelemetry?.({
+				contextUsage: { tokens: 97, contextWindow: 100, percent: 97 },
+			});
+			spawn.completeStatus();
+			spawn.resolve(
+				defaultAgentResult({
+					killed: true,
+					contextUsage: { tokens: 97, contextWindow: 100, percent: 97 },
+				}),
+			);
+		});
+
+		expect(records).toHaveLength(1);
+		expect(records[0].killCount).toBe(1);
+	});
+
+	it("9.4: failed compaction finish metadata kills deferred worker", async () => {
+		const { records } = await runPolicyFixture("defer", (spawn) => {
+			spawn.onTelemetry?.({
+				contextUsage: { tokens: 96, contextWindow: 100, percent: 96 },
+			});
+			spawn.onEvent?.(runtimeEvent(spawn.hostOpts, "compaction_started"));
+			spawn.onEvent?.(
+				runtimeEvent(spawn.hostOpts, "compaction_finished", {
+					success: false,
+					status: "failed",
+					willRetry: false,
+					aborted: false,
+				}),
+			);
+			spawn.completeStatus();
+			spawn.resolve(
+				defaultAgentResult({
+					killed: true,
+					contextUsage: { tokens: 96, contextWindow: 100, percent: 96 },
+					compactions: 1,
+					compactionsStarted: 1,
+					compactionEvents: [
+						{ phase: "started" },
+						{ phase: "ended", success: false, status: "failed", willRetry: false, aborted: false },
+					],
+				}),
+			);
+		});
+
+		expect(records).toHaveLength(1);
+		expect(records[0].killCount).toBe(1);
+	});
+
+	it("9.5: compaction event callback failures do not crash the worker run", async () => {
+		const badPayload = {} as Record<string, unknown>;
+		Object.defineProperty(badPayload, "success", {
+			enumerable: true,
+			get() {
+				throw new Error("payload getter failed");
+			},
+		});
+
+		const { result, records } = await runPolicyFixture("defer", (spawn) => {
+			spawn.onEvent?.(runtimeEvent(spawn.hostOpts, "compaction_finished", badPayload));
+			spawn.completeStatus();
+			spawn.resolve(defaultAgentResult());
+		});
+
+		expect(result.outcome.status).toBe("succeeded");
+		expect(records).toHaveLength(1);
+		expect(records[0].killCount).toBe(0);
 	});
 });

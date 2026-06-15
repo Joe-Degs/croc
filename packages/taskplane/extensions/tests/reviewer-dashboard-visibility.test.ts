@@ -100,6 +100,7 @@ function makeConfig(root: string): LaneRunnerConfig {
 		maxWorkerMinutes: 1,
 		warnPercent: 80,
 		killPercent: 95,
+		compactionKillPolicy: "immediate",
 	};
 }
 

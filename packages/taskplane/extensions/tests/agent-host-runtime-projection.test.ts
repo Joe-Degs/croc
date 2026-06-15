@@ -298,6 +298,35 @@ describe("Runtime projection helpers", () => {
 });
 
 describe("Runtime projection event persistence behavior", () => {
+	it("labels omitted agent model as the default model", async () => {
+		const events: RuntimeAgentEvent[] = [];
+		const { promise } = spawnAgent(
+			{
+				agentId: "orch-test-lane-1-worker",
+				role: "worker",
+				batchId: "batch-projection",
+				laneNumber: 1,
+				taskId: "TP-PROJ",
+				repoId: "default",
+				cwd: process.cwd(),
+				prompt: "run",
+				mailboxDir: null,
+				stateRoot: null,
+			},
+			(evt) => events.push(evt),
+		);
+
+		expect(lastSpawnedProc).toBeDefined();
+		lastSpawnedProc!.emit("close", 0, null);
+
+		await promise;
+
+		const started = events.find((event) => event.type === "agent_started");
+		expect(started).toBeDefined();
+		expect(started!.payload.model).toBe("default model");
+		expect(JSON.stringify(started!.payload)).not.toContain("[Undefined]");
+	});
+
 	it("omits oversized Pi RPC JSONL lines and recovers for later valid events", async () => {
 		const events: RuntimeAgentEvent[] = [];
 		const { promise } = spawnAgent(

@@ -150,6 +150,16 @@ picks up from the first incomplete step via STATUS.md — the same recovery
 mechanism as any other worker exit, just triggered by context pressure instead
 of natural completion.
 
+`compactionKillPolicy` controls what happens at the context kill threshold. The
+default, `"immediate"`, kills the worker as soon as context usage reaches
+`kill_percent`. With `"defer"`, Taskplane still treats `kill_percent` as a
+safety boundary, but it gives Pi a short chance to enter compaction first. If Pi
+emits `compaction_started`, a successful `compaction_finished` event clears the
+pending kill. Failed, skipped, or aborted compaction kills the worker unless Pi
+reports that it will retry, and active or retrying compaction remains bounded by
+the same grace timer. Pi remains responsible for whether compaction is enabled
+and how summaries are produced.
+
 ### Model fallback recovery (TP-055)
 
 When a configured model becomes unavailable mid-batch (401/403/429, model

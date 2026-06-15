@@ -895,3 +895,47 @@ describe("14.x: Monitor de-TMUX for V2 (TP-112)", () => {
 		expect(monitorBlock).toContain("Non-fatal");
 	});
 });
+
+describe("15.x: Runtime V2 context config threading", () => {
+	it("15.1: executeWave accepts contextConfig and passes it to executeLaneV2", () => {
+		const waveIdx = executionSrc.indexOf("export async function executeWave(");
+		expect(waveIdx).toBeGreaterThan(-1);
+		const waveBlock = executionSrc.slice(waveIdx, waveIdx + 22000).replace(/\s+/g, " ");
+		expect(waveBlock).toContain('contextConfig?: TaskRunnerConfig["context"]');
+		expect(waveBlock).toContain("onLaneRespawned, contextConfig,");
+	});
+
+	it("15.2: engine Runtime V2 call sites pass runnerConfig context", () => {
+		const engineContextArgs = engineSrc.match(/runnerConfig\?\.context/g) ?? [];
+		expect(engineContextArgs.length).toBeGreaterThanOrEqual(4);
+
+		for (const marker of [
+			"async function attemptWorkerCrashRetry(",
+			"async function attemptModelFallbackRetry(",
+			"async function attemptStaleWorktreeRecovery(",
+			"let waveResult = await executeWave(",
+		]) {
+			const idx = engineSrc.indexOf(marker);
+			expect(idx).toBeGreaterThan(-1);
+			const block = engineSrc.slice(idx, idx + 12000);
+			expect(block).toContain("runnerConfig?.context");
+		}
+	});
+
+	it("15.3: resume Runtime V2 call sites pass runnerConfig context", () => {
+		const resumeSrc = readFileSync(join(__dirname, "..", "taskplane", "resume.ts"), "utf-8");
+		const resumeContextArgs = resumeSrc.match(/runnerConfig\.context/g) ?? [];
+		expect(resumeContextArgs.length).toBeGreaterThanOrEqual(3);
+
+		for (const marker of [
+			"V2 reconnect: terminate + rehydrate",
+			"Runtime V2 re-execution",
+			"const waveResult = await executeWave(",
+		]) {
+			const idx = resumeSrc.indexOf(marker);
+			expect(idx).toBeGreaterThan(-1);
+			const block = resumeSrc.slice(idx, idx + 1400);
+			expect(block).toContain("runnerConfig.context");
+		}
+	});
+});

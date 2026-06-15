@@ -1697,6 +1697,9 @@ export async function resumeOrchBatch(
 						...buildWorkerExcludeEnv(runnerConfig.workerExcludeExtensions),
 					},
 					emitAlert,
+					undefined,
+					undefined,
+					runnerConfig.context,
 				);
 				const taskResult = laneResult.tasks.find((t) => t.taskId === task.taskId);
 				if (taskResult?.status === "succeeded") {
@@ -1789,6 +1792,9 @@ export async function resumeOrchBatch(
 						...buildWorkerExcludeEnv(runnerConfig.workerExcludeExtensions),
 					},
 					emitAlert,
+					undefined,
+					undefined,
+					runnerConfig.context,
 				);
 				const taskResult = laneResult.tasks.find((t) => t.taskId === task.taskId);
 				const pollResult: { status: LaneTaskStatus; exitReason: string; doneFileFound: boolean } = {
@@ -2374,6 +2380,7 @@ export async function resumeOrchBatch(
 			runnerConfig.workerExcludeExtensions ?? [],
 			onLaneTerminated ?? undefined,
 			onLaneRespawned ?? undefined,
+			runnerConfig.context,
 		);
 
 		batchState.waveResults.push(waveResult);

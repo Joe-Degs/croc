@@ -28,6 +28,7 @@ function makeConfig(overrides: { worker_context_window?: number } = {}) {
 			max_worker_iterations: 20,
 			max_review_cycles: 2,
 			no_progress_limit: 3,
+			compaction_kill_policy: "immediate",
 		},
 	} as any;
 }
@@ -151,6 +152,10 @@ describe("config-schema defaults (TP-047)", () => {
 	it("2.3 — killPercent defaults to 95", () => {
 		expect(DEFAULT_TASK_RUNNER_SECTION.context.killPercent).toBe(95);
 	});
+
+	it("2.4 — compactionKillPolicy defaults to immediate", () => {
+		expect(DEFAULT_TASK_RUNNER_SECTION.context.compactionKillPolicy).toBe("immediate");
+	});
 });
 
 // ── 3. task-runner.ts hardcoded defaults ─────────────────────────────
@@ -163,6 +168,7 @@ describe("task-runner loadConfig defaults (TP-047)", () => {
 		expect(config.context.worker_context_window).toBe(0);
 		expect(config.context.warn_percent).toBe(85);
 		expect(config.context.kill_percent).toBe(95);
+		expect(config.context.compaction_kill_policy).toBe("immediate");
 	});
 });
 

@@ -133,6 +133,8 @@ export interface ReviewerConfig {
 }
 
 /** Context/resource limits for task execution */
+export type CompactionKillPolicy = "immediate" | "defer";
+
 export interface ContextConfig {
 	/** Context window size used for worker context pressure tracking.
 	 *  Set to 0 (default) for auto-detection from the pi model registry.
@@ -150,6 +152,8 @@ export interface ContextConfig {
 	noProgressLimit: number;
 	/** Optional per-worker wall-clock cap (minutes, used in orchestrated flows) */
 	maxWorkerMinutes?: number;
+	/** Whether context pressure kills immediately or waits for compaction to settle */
+	compactionKillPolicy: CompactionKillPolicy;
 }
 
 /** Task area definition */
@@ -606,6 +610,7 @@ export const DEFAULT_TASK_RUNNER_SECTION: TaskRunnerSection = {
 		maxWorkerIterations: 20,
 		maxReviewCycles: 2,
 		noProgressLimit: 3,
+		compactionKillPolicy: "immediate",
 	},
 	taskAreas: {},
 	referenceDocs: {},

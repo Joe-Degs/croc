@@ -43,6 +43,7 @@ import type {
 	RuntimeLaneSnapshot,
 	RuntimeRegistry,
 	SupervisorAlertCallback,
+	TaskRunnerConfig,
 } from "./types.ts";
 import { resolvePacketPaths, buildRuntimeAgentId } from "./types.ts";
 import type { TaskExitDiagnostic } from "./diagnostics.ts";
@@ -1938,6 +1939,7 @@ export async function executeWave(
 	workerExcludeExtensions?: string[],
 	onLaneTerminated?: import("./types.ts").LaneTerminatedCallback,
 	onLaneRespawned?: (laneNumber: number, agentId: string, batchId: string) => void,
+	contextConfig?: TaskRunnerConfig["context"],
 ): Promise<WaveExecutionResult> {
 	const startedAt = Date.now();
 	const policy = config.failure.on_task_failure;
@@ -2079,6 +2081,7 @@ export async function executeWave(
 			onSupervisorAlert,
 			onLaneTerminated,
 			onLaneRespawned,
+			contextConfig,
 		),
 	);
 
@@ -2826,6 +2829,7 @@ export async function executeLaneV2(
 	 * terminated (e.g., in a prior wave).
 	 */
 	onLaneRespawned?: (laneNumber: number, agentId: string, batchId: string) => void,
+	contextConfig?: TaskRunnerConfig["context"],
 ): Promise<LaneExecutionResult> {
 	const laneId = lane.laneId;
 	const laneStartTime = Date.now();
@@ -2952,17 +2956,12 @@ export async function executeLaneV2(
 			// var is unset, falls through to the same `"project"` literal as
 			// before — behavior-neutral.
 			projectName: extraEnvVars?.TASKPLANE_PROJECT_NAME || "project",
-			maxIterations: 20,
-			noProgressLimit: 3,
-			// TP-195: read the canonical `max_worker_minutes` field (snake_case
-			// per `OrchestratorConfig.failure` in types.ts). The previous code
-			// read a non-existent `maxWorkerMinutes` camelCase alias — always
-			// undefined — silently ignoring any operator-set value. Honoring
-			// the config is the intended behavior; default of 120 preserved
-			// when the field is unset.
-			maxWorkerMinutes: config.failure?.max_worker_minutes || 120,
-			warnPercent: 85,
-			killPercent: 95,
+			maxIterations: contextConfig?.max_worker_iterations ?? 20,
+			noProgressLimit: contextConfig?.no_progress_limit ?? 3,
+			maxWorkerMinutes: contextConfig?.max_worker_minutes ?? config.failure?.max_worker_minutes ?? 120,
+			warnPercent: contextConfig?.warn_percent ?? 85,
+			killPercent: contextConfig?.kill_percent ?? 95,
+			compactionKillPolicy: contextConfig?.compaction_kill_policy ?? "immediate",
 			onSupervisorAlert,
 			onLaneTerminated,
 		};

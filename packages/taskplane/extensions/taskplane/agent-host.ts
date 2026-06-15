@@ -1749,7 +1749,7 @@ export function spawnAgent(
 		}
 		proc.stdin.write(JSON.stringify({ type: "prompt", message: opts.prompt }) + "\n");
 
-		emitEvent("agent_started", { model: opts.model, cwd: opts.cwd });
+		emitEvent("agent_started", { model: opts.model ?? "default model", cwd: opts.cwd });
 		// TP-111: Emit prompt_sent with bounded preview
 		emitEvent("prompt_sent", { text: truncatePayload(opts.prompt, MAX_CONV_PAYLOAD_CHARS) });
 	});

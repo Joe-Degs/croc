@@ -328,6 +328,15 @@ export const SECTIONS: SectionDef[] = [
 				description: "Context utilization hard-stop threshold (%)",
 			},
 			{
+				configPath: "taskRunner.context.compactionKillPolicy",
+				label: "Compaction Kill Policy",
+				control: "picker",
+				layer: "L1",
+				fieldType: "enum",
+				values: ["immediate", "defer"],
+				description: "Worker behavior when context reaches the kill threshold",
+			},
+			{
 				configPath: "taskRunner.context.maxWorkerIterations",
 				label: "Max Iterations",
 				control: "input",

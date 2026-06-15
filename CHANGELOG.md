@@ -7,6 +7,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Added `taskplane.compactionKillPolicy` with `immediate` and `defer` modes.
+- Added deferred Taskplane context-kill behavior so workers can wait for Pi compaction before Taskplane terminates a high-context session.
+- Added Taskplane configuration, schema, docs, and settings TUI support for `compactionKillPolicy`.
+- Added Croc battery contribution wiring so enabled batteries can add packages and Taskplane tool allowlist entries from one place.
+- Added Taskplane worker, reviewer, and merge allowlist support for `headroom_retrieve` when the Headroom CCR bridge is enabled.
+
+### Changed
+
+- Threaded Taskplane Runtime V2 context settings through normal execution, retry, resume, reconnect, and merge-related paths.
+- Updated Croc-generated Taskplane config to include the configured compaction kill policy.
+- Improved Taskplane context telemetry handling around compaction lifecycle events.
+- Bundled Taskplane now reports omitted agent models as `default model` instead of rendering `[Undefined]`.
+
+### Fixed
+
+- Fixed Headroom CCR retrieval in Taskplane workers by exposing `headroom_retrieve` in generated agent tool allowlists.
+- Fixed deferred context handling so successful compaction clears a pending Taskplane kill and failed, skipped, or aborted compaction still allows Taskplane to enforce the kill threshold.
+- Fixed non-finite context telemetry handling so invalid context values are ignored.
+
 ## [0.2.2] - 2026-06-12
 
 ### Added

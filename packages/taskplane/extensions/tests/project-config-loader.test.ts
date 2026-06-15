@@ -70,6 +70,17 @@ function writeOrchestratorYaml(root: string, content: string): void {
 	writePiFile(root, "task-orchestrator.yaml", content);
 }
 
+function expectConfigValidationError(fn: () => unknown, field: string): void {
+	try {
+		fn();
+		assert.fail("should have thrown");
+	} catch (err) {
+		expect(err).toBeInstanceOf(ConfigLoadError);
+		expect((err as ConfigLoadError).code).toBe("CONFIG_VALIDATION_ERROR");
+		expect((err as ConfigLoadError).message).toContain(field);
+	}
+}
+
 // ── Setup / Teardown ─────────────────────────────────────────────────
 
 beforeEach(() => {
@@ -344,6 +355,215 @@ describe("loadProjectConfig precedence/error matrix", () => {
 		expect(config.taskRunner.reviewer.tools).toBe("read,bash");
 		expect(config.orchestrator.orchestrator.maxLanes).toBe(4);
 	});
+});
+
+describe("context compaction kill policy and validation", () => {
+	it("1.14: compactionKillPolicy defaults to immediate and maps to snake_case", () => {
+		const dir = makeTestDir("compaction-policy-default");
+
+		const config = loadProjectConfig(dir);
+		const taskConfig = toTaskConfig(config);
+
+		expect(config.taskRunner.context.compactionKillPolicy).toBe("immediate");
+		expect(taskConfig.context.compaction_kill_policy).toBe("immediate");
+	});
+
+	it("1.15: JSON compactionKillPolicy maps to snake_case adapter", () => {
+		const dir = makeTestDir("compaction-policy-json");
+		writeJsonConfig(dir, {
+			configVersion: CONFIG_VERSION,
+			taskRunner: {
+				context: { compactionKillPolicy: "defer" },
+			},
+		});
+
+		const config = loadProjectConfig(dir);
+		const taskConfig = toTaskConfig(config);
+
+		expect(config.taskRunner.context.compactionKillPolicy).toBe("defer");
+		expect(taskConfig.context.compaction_kill_policy).toBe("defer");
+	});
+
+	it("1.15b: toTaskRunnerConfig preserves full context as snake_case", () => {
+		const dir = makeTestDir("task-runner-context-adapter");
+		writeJsonConfig(dir, {
+			configVersion: CONFIG_VERSION,
+			taskRunner: {
+				context: {
+					workerContextWindow: 123456,
+					warnPercent: 70,
+					killPercent: 90,
+					maxWorkerIterations: 11,
+					maxReviewCycles: 4,
+					noProgressLimit: 6,
+					maxWorkerMinutes: 55,
+					compactionKillPolicy: "defer",
+				},
+			},
+		});
+
+		const legacy = toTaskRunnerConfig(loadProjectConfig(dir));
+
+		expect(legacy.context).toEqual({
+			worker_context_window: 123456,
+			warn_percent: 70,
+			kill_percent: 90,
+			max_worker_iterations: 11,
+			max_review_cycles: 4,
+			no_progress_limit: 6,
+			max_worker_minutes: 55,
+			compaction_kill_policy: "defer",
+		});
+	});
+
+	it("1.16: YAML compaction_kill_policy maps to camelCase", () => {
+		const dir = makeTestDir("compaction-policy-yaml");
+		writeTaskRunnerYaml(dir, ["context:", "  compaction_kill_policy: defer"].join("\n"));
+
+		const config = loadProjectConfig(dir);
+		const taskConfig = toTaskConfig(config);
+
+		expect(config.taskRunner.context.compactionKillPolicy).toBe("defer");
+		expect(taskConfig.context.compaction_kill_policy).toBe("defer");
+	});
+
+	it("1.17: global preferences compactionKillPolicy is honored", () => {
+		const dir = makeTestDir("compaction-policy-global");
+		const agentDir = process.env.PI_CODING_AGENT_DIR!;
+		writeFileSync(
+			join(agentDir, "taskplane", "preferences.json"),
+			JSON.stringify({ taskRunner: { context: { compactionKillPolicy: "defer" } } }, null, 2),
+			"utf-8",
+		);
+
+		const config = loadProjectConfig(dir);
+
+		expect(config.taskRunner.context.compactionKillPolicy).toBe("defer");
+	});
+
+	it("1.18: invalid JSON compactionKillPolicy fails config loading", () => {
+		const dir = makeTestDir("compaction-policy-invalid-json");
+		writeJsonConfig(dir, {
+			configVersion: CONFIG_VERSION,
+			taskRunner: {
+				context: { compactionKillPolicy: "later" },
+			},
+		});
+
+		expectConfigValidationError(
+			() => loadProjectConfig(dir),
+			"taskRunner.context.compactionKillPolicy",
+		);
+	});
+
+	it("1.19: invalid YAML compaction_kill_policy fails config loading", () => {
+		const dir = makeTestDir("compaction-policy-invalid-yaml");
+		writeTaskRunnerYaml(dir, ["context:", "  compaction_kill_policy: later"].join("\n"));
+
+		expectConfigValidationError(
+			() => loadProjectConfig(dir),
+			"taskRunner.context.compactionKillPolicy",
+		);
+	});
+
+	it("1.20: invalid global preferences compactionKillPolicy fails config loading", () => {
+		const dir = makeTestDir("compaction-policy-invalid-global");
+		const agentDir = process.env.PI_CODING_AGENT_DIR!;
+		writeFileSync(
+			join(agentDir, "taskplane", "preferences.json"),
+			JSON.stringify({ taskRunner: { context: { compactionKillPolicy: "later" } } }, null, 2),
+			"utf-8",
+		);
+
+		expectConfigValidationError(
+			() => loadProjectConfig(dir),
+			"taskRunner.context.compactionKillPolicy",
+		);
+	});
+
+	it("1.21: task-runner loadConfig rethrows validation errors", () => {
+		const dir = makeTestDir("compaction-policy-invalid-loadconfig");
+		writeTaskRunnerYaml(dir, ["context:", "  compaction_kill_policy: later"].join("\n"));
+
+		expectConfigValidationError(
+			() => taskRunnerLoadConfig(dir),
+			"taskRunner.context.compactionKillPolicy",
+		);
+	});
+
+	const invalidNumericCases: Array<{
+		name: string;
+		context: Record<string, unknown>;
+		field: string;
+	}> = [
+		{
+			name: "workerContextWindow must be a finite number",
+			context: { workerContextWindow: "200000" },
+			field: "taskRunner.context.workerContextWindow",
+		},
+		{
+			name: "workerContextWindow must not be negative",
+			context: { workerContextWindow: -1 },
+			field: "taskRunner.context.workerContextWindow",
+		},
+		{
+			name: "workerContextWindow must be an integer",
+			context: { workerContextWindow: 0.5 },
+			field: "taskRunner.context.workerContextWindow",
+		},
+		{
+			name: "warnPercent must be a finite number",
+			context: { warnPercent: "85" },
+			field: "taskRunner.context.warnPercent",
+		},
+		{
+			name: "warnPercent must be positive",
+			context: { warnPercent: 0 },
+			field: "taskRunner.context.warnPercent",
+		},
+		{
+			name: "killPercent must not exceed 100",
+			context: { killPercent: 101 },
+			field: "taskRunner.context.killPercent",
+		},
+		{
+			name: "warnPercent must be less than killPercent",
+			context: { warnPercent: 95, killPercent: 95 },
+			field: "taskRunner.context.warnPercent",
+		},
+		{
+			name: "maxWorkerIterations must be an integer",
+			context: { maxWorkerIterations: 1.5 },
+			field: "taskRunner.context.maxWorkerIterations",
+		},
+		{
+			name: "maxReviewCycles must be positive",
+			context: { maxReviewCycles: 0 },
+			field: "taskRunner.context.maxReviewCycles",
+		},
+		{
+			name: "noProgressLimit must be positive",
+			context: { noProgressLimit: 0 },
+			field: "taskRunner.context.noProgressLimit",
+		},
+		{
+			name: "maxWorkerMinutes must be positive when set",
+			context: { maxWorkerMinutes: 0 },
+			field: "taskRunner.context.maxWorkerMinutes",
+		},
+	];
+
+	for (const testCase of invalidNumericCases) {
+		it(`1.22: ${testCase.name}`, () => {
+			const dir = makeTestDir("context-validation");
+			writeJsonConfig(dir, {
+				configVersion: CONFIG_VERSION,
+				taskRunner: { context: testCase.context },
+			});
+
+			expectConfigValidationError(() => loadProjectConfig(dir), testCase.field);
+		});
+	}
 });
 
 // ── 2.x: Workspace root resolution ──────────────────────────────────

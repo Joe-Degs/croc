@@ -189,8 +189,9 @@ Settings that control worker iteration limits and context window management.
 | Setting | Type | Default | Options | Description |
 |---------|------|---------|---------|-------------|
 | **Context Window** | number | `200000` | Any positive number | Worker context window size in tokens. Workers track their context usage against this limit. When usage exceeds the kill threshold, the iteration is terminated to prevent context overflow. |
-| **Warn %** | number | `70` | 1-100 | Context utilization percentage that triggers a warning. The worker is notified it's approaching the limit and should wrap up soon. |
-| **Kill %** | number | `85` | 1-100 | Context utilization percentage that force-terminates the worker iteration. The worker's current work is lost for that iteration, but STATUS.md checkpoints are preserved. |
+| **Warn %** | number | `85` | 1-100 | Context utilization percentage that triggers a warning. The worker is notified it's approaching the limit and should wrap up soon. |
+| **Kill %** | number | `95` | 1-100 | Context utilization percentage that force-terminates the worker iteration. The worker's current work is lost for that iteration, but STATUS.md checkpoints are preserved. |
+| **Compaction Kill Policy** | picker | `immediate` | `immediate`, `defer` | Whether Taskplane kills immediately at the context limit or defers while Pi compacts. `defer` does not enable Pi compaction; it only waits for Pi's compaction events before killing. |
 | **Max Iterations** | number | `20` | Any positive number | Maximum worker iterations per step. Each iteration is a fresh-context agent invocation. If the worker hasn't completed the step after this many iterations, execution stops. |
 | **Max Review Cycles** | number | `2` | Any positive number | Maximum REVISE loops per review stage. If the reviewer keeps returning REVISE after this many cycles, the task moves forward anyway. Prevents infinite review loops. |
 | **No Progress Limit** | number | `3` | Any positive number | Maximum consecutive iterations with no checkbox progress before the task is marked as stalled. Prevents workers from spinning without making progress. |

@@ -201,6 +201,7 @@ Taskplane is bundled by default:
 taskplane:
   packageSource: bundled
   maxLanes: 3
+  compactionKillPolicy: immediate
   dashboard:
     enabled: true
     host: 127.0.0.1
@@ -210,6 +211,10 @@ taskplane:
 `taskplane.dashboard.host` defaults to `127.0.0.1`. Set it to `0.0.0.0` or a specific interface address when the dashboard must be reachable from another machine.
 
 `taskplane.tasksPath` is relative to the runtime root. In workspace mode Croc rewrites it so tasks live inside `workspace.taskPacketRepo`.
+
+`taskplane.compactionKillPolicy` passes through to Taskplane as `taskRunner.context.compactionKillPolicy`. Allowed values are `immediate` and `defer`; the default is `immediate`. `immediate` preserves the current context-limit behavior. `defer` lets Taskplane wait briefly for Pi compaction before killing a worker at the context limit. Croc and Taskplane do not enable Pi compaction or change Pi compaction settings. Pi owns whether compaction is enabled and how summaries are produced.
+
+When `defer` is enabled, a successful Pi compaction clears the pending context kill. Failed, skipped, or aborted compaction does not clear it unless Pi reports a retry, and retries remain bounded by Taskplane's internal grace timer.
 
 ## Batteries
 

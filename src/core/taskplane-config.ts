@@ -1,10 +1,10 @@
 import { join } from "node:path";
+import { getTaskplaneBatteryTools } from "./battery-contributions.ts";
 import type { CrocConfig } from "./config.ts";
 import { writeJson } from "./config.ts";
 
 const DEFAULT_TOOLS = "read,write,edit,bash,grep,find,ls";
 const REVIEWER_TOOLS = "read,bash,grep,find,ls";
-const WEB_SEARCH_TOOLS = ["web_search", "web_fetch"];
 
 function addTools(tools: string, extras: string[]): string {
 	const merged = new Set(
@@ -18,7 +18,7 @@ function addTools(tools: string, extras: string[]): string {
 }
 
 function toolsFor(config: CrocConfig, baseTools: string): string {
-	return config.batteries.webSearch.enabled ? addTools(baseTools, WEB_SEARCH_TOOLS) : baseTools;
+	return addTools(baseTools, getTaskplaneBatteryTools(config));
 }
 
 export function getTaskplaneConfigPath(cwd: string): string {
@@ -61,6 +61,7 @@ export function buildTaskplaneConfig(config: CrocConfig): Record<string, unknown
 				workerContextWindow: 0,
 				warnPercent: 85,
 				killPercent: 95,
+				compactionKillPolicy: taskplane.compactionKillPolicy,
 				maxWorkerIterations: taskplane.maxWorkerIterations,
 				maxReviewCycles: 2,
 				noProgressLimit: 3,

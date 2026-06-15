@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { getBatteryPackageSources } from "./battery-contributions.ts";
 import type { CrocConfig } from "./config.ts";
 import { readJsonObject, writeJson } from "./config.ts";
 
@@ -81,11 +82,8 @@ export function writePiSettings(
 	if (config.taskplane.enabled) {
 		packages = addUniquePackage(packages, resolveTaskplanePackageSource(config, bundledTaskplanePackagePath));
 	}
-	if (config.batteries.webSearch.enabled) {
-		packages = addUniquePackage(packages, config.batteries.webSearch.packageSource);
-	}
-	if (config.batteries.piLens.enabled) {
-		packages = addUniquePackage(packages, config.batteries.piLens.packageSource);
+	for (const packageSource of getBatteryPackageSources(config)) {
+		packages = addUniquePackage(packages, packageSource);
 	}
 	extensions = addUniqueString(extensions, extensionPath);
 	const skills = config.skills.enabled ? [...new Set(skillPaths)] : [];

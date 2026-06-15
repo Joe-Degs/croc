@@ -72,4 +72,20 @@ describe("writePiSettings", () => {
 		assert.equal(settings.defaultProvider, undefined);
 		assert.equal(settings.defaultThinkingLevel, undefined);
 	});
+
+	it("writes enabled battery packages", () => {
+		const config = createDefaultConfig(tempDir);
+		config.batteries.webSearch.enabled = true;
+		config.batteries.piLens.enabled = true;
+
+		writePiSettings(tempDir, config, "/new/croc/dist/extensions/provider.js", "/new/croc/packages/taskplane");
+
+		const settings = JSON.parse(readFileSync(join(tempDir, ".pi", "settings.json"), "utf-8"));
+
+		assert.deepEqual(settings.packages, [
+			"/new/croc/packages/taskplane",
+			"npm:@juicesharp/rpiv-web-tools",
+			"npm:pi-lens",
+		]);
+	});
 });

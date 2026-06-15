@@ -173,9 +173,10 @@ Set `reviewer.model` explicitly (optional) to use a different model than the wor
 {
   "taskRunner": {
     "context": {
-      "workerContextWindow": 200000,
-      "warnPercent": 70,
-      "killPercent": 85,
+      "workerContextWindow": 0,
+      "warnPercent": 85,
+      "killPercent": 95,
+      "compactionKillPolicy": "immediate",
       "maxWorkerIterations": 20,
       "maxReviewCycles": 2,
       "noProgressLimit": 3,
@@ -185,7 +186,9 @@ Set `reviewer.model` explicitly (optional) to use a different model than the wor
 }
 ```
 
-Controls loop safety, context pressure, and retry limits.
+Controls loop safety, context pressure, and retry limits. `compactionKillPolicy` can be `"immediate"` or `"defer"`. The default `"immediate"` preserves existing behavior: the worker is killed when context usage reaches `killPercent`. `"defer"` gives Pi a bounded chance to compact before Taskplane kills the worker. Taskplane does not enable or configure Pi compaction; Pi still owns compaction settings. If compaction succeeds, the pending kill is cleared. If compaction fails, skips, aborts, or never starts, Taskplane still kills the worker.
+
+Legacy YAML uses `context.compaction_kill_policy` for the same setting.
 
 ### `taskRunner.taskAreas` (required in practice)
 
