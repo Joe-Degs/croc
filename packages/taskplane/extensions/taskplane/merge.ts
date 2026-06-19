@@ -81,7 +81,7 @@ import {
 } from "./verification.ts";
 import { spawnAgent } from "./agent-host.ts";
 import type { AgentHostOptions, AgentHostResult, AgentTelemetryCallback } from "./agent-host.ts";
-import { loadPiSettingsResources, filterExcludedExtensions } from "./settings-loader.ts";
+import { buildPiExtensionLoadSpecs, loadPiSettingsResources } from "./settings-loader.ts";
 import type { RuntimeBackend } from "./execution.ts";
 import type { VerificationBaseline, FingerprintDiff, TestFingerprint } from "./verification.ts";
 
@@ -823,10 +823,7 @@ export async function spawnMergeAgentV2(
 	const mergeStateRoot = stateRoot ?? repoRoot;
 	const settingsResources = loadPiSettingsResources(mergeStateRoot);
 	const mergeExclusions = config.merge.exclude_extensions ?? [];
-	const mergeExtensions = filterExcludedExtensions(
-		[...settingsResources.extensions, ...settingsResources.packages],
-		mergeExclusions,
-	);
+	const mergeExtensions = buildPiExtensionLoadSpecs(settingsResources, mergeExclusions);
 
 	const opts: AgentHostOptions = {
 		agentId: sessionName,

@@ -5,7 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { createDefaultConfig } from "../src/core/config.ts";
-import { buildOrchCommand, buildPiArgs, resolveOrchTarget, selectCrocTmuxPane } from "../src/core/runtime.ts";
+import {
+	buildOrchCommand,
+	buildPiArgs,
+	buildTaskplaneControlCommand,
+	resolveOrchTarget,
+	selectCrocTmuxPane,
+} from "../src/core/runtime.ts";
 import { run } from "../src/main.ts";
 
 interface HeadroomServer {
@@ -149,6 +155,58 @@ describe("orchestrator target resolution", () => {
 			resolveOrchTarget(configWithTasks(), "packets/taskplane-tasks/TASK-004/PROMPT.md"),
 			"packets/taskplane-tasks/TASK-004/PROMPT.md",
 		);
+	});
+
+	it("builds live taskplane control slash commands", () => {
+		const config = configWithTasks();
+
+		assert.equal(buildTaskplaneControlCommand("pause", [], config), "/orch-pause");
+		assert.equal(buildTaskplaneControlCommand("resume", ["--force"], config), "/orch-resume --force");
+		assert.equal(buildTaskplaneControlCommand("abort", ["--hard"], config), "/orch-abort --hard");
+		assert.equal(
+			buildTaskplaneControlCommand("start", ["TASK-004"], config),
+			"/orch packets/taskplane-tasks/TASK-004-implement-maelstrom-broadcast-challenge-part-3b/PROMPT.md",
+		);
+	});
+
+	it("rejects invalid live taskplane control arguments", () => {
+		const config = configWithTasks();
+
+		assert.throws(() => buildTaskplaneControlCommand("start", [], config), /requires a target/);
+		assert.throws(() => buildTaskplaneControlCommand("pause", ["--force"], config), /does not accept arguments/);
+		assert.throws(() => buildTaskplaneControlCommand("resume", ["--hard"], config), /Unsupported/);
+		assert.throws(() => buildTaskplaneControlCommand("abort", ["--force"], config), /Unsupported/);
+	});
+});
+
+describe("croc taskplane live control", () => {
+	it("rejects taskplane start without launching Pi when no target is provided", async () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "croc-taskplane-start-"));
+		const marker = join(tempDir, "pi-started");
+		const piCommand = join(tempDir, "pi-command.sh");
+		try {
+			writeFileSync(piCommand, `#!/bin/sh\nprintf 'started\n' > ${shellQuote(marker)}\n`, "utf-8");
+			chmodSync(piCommand, 0o700);
+			writeFileSync(
+				join(tempDir, "croc.json"),
+				`${JSON.stringify(
+					{
+						configVersion: 1,
+						runtime: { tmux: { enabled: false } },
+						pi: { command: piCommand, name: "" },
+						taskplane: { dashboard: { enabled: false } },
+					},
+					null,
+					"\t",
+				)}\n`,
+				"utf-8",
+			);
+
+			await assert.rejects(() => run(["taskplane", "start", "--cwd", tempDir]), /requires a target/);
+			assert.equal(existsSync(marker), false);
+		} finally {
+			if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
+		}
 	});
 });
 

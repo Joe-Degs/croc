@@ -12,16 +12,17 @@
 
 import { describe, it, beforeEach, afterEach } from "node:test";
 import { strict as assert } from "node:assert";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
-import { join } from "path";
-import { homedir, tmpdir } from "os";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
+	buildPiExtensionLoadSpecs,
+	filterExcludedExtensions,
 	loadPiSettingsPackages,
 	loadPiSettingsResources,
 	loadPiSettingsExtensions,
 	loadPiSettingsSkills,
-	filterExcludedExtensions,
 } from "../taskplane/settings-loader.ts";
 
 // ── Test Helpers ─────────────────────────────────────────────────────
@@ -166,6 +167,49 @@ describe("loadPiSettingsPackages", () => {
 		assert.deepEqual(result, ["npm:pi-memory"]);
 	});
 
+	it("keeps package sources for config while resolving installed project npm packages for loading", () => {
+		const packageRoot = join(tempDir, ".pi", "npm", "node_modules", "@juicesharp", "rpiv-web-tools");
+		mkdirSync(packageRoot, { recursive: true });
+		writeFileSync(
+			join(packageRoot, "package.json"),
+			JSON.stringify({ pi: { extensions: ["./index.ts"] } }),
+			"utf-8",
+		);
+		writeProjectSettings(tempDir, {
+			packages: ["npm:@juicesharp/rpiv-web-tools", "npm:pi-memory"],
+		});
+
+		const resources = loadPiSettingsResources(tempDir);
+
+		assert.deepEqual(resources.packages, ["npm:@juicesharp/rpiv-web-tools", "npm:pi-memory"]);
+		assert.deepEqual(resources.packageLoadSpecs, [packageRoot, "npm:pi-memory"]);
+		assert.deepEqual(loadPiSettingsPackages(tempDir), resources.packages);
+	});
+
+	it("deduplicates installed npm package load specs by package identity", () => {
+		const agentDir = process.env.PI_CODING_AGENT_DIR;
+		assert.ok(agentDir);
+		const projectPackageRoot = join(
+			tempDir,
+			".pi",
+			"npm",
+			"node_modules",
+			"@juicesharp",
+			"rpiv-web-tools",
+		);
+		const globalPackageRoot = join(agentDir, "npm", "node_modules", "@juicesharp", "rpiv-web-tools");
+		mkdirSync(projectPackageRoot, { recursive: true });
+		mkdirSync(globalPackageRoot, { recursive: true });
+		writeProjectSettings(tempDir, { packages: ["npm:@juicesharp/rpiv-web-tools"] });
+		writeAgentSettings(agentDir, { packages: ["npm:@juicesharp/rpiv-web-tools"] });
+
+		const resources = loadPiSettingsResources(tempDir);
+
+		assert.deepEqual(resources.packages, ["npm:@juicesharp/rpiv-web-tools"]);
+		assert.deepEqual(resources.packageLoadSpecs, [projectPackageRoot]);
+		assert.equal(resources.packageResources[0]?.scope, "project");
+	});
+
 	it("reads project and global explicit extensions and skills", () => {
 		const agentDir = process.env.PI_CODING_AGENT_DIR;
 		assert.ok(agentDir);
@@ -182,13 +226,55 @@ describe("loadPiSettingsPackages", () => {
 
 		const result = loadPiSettingsResources(tempDir);
 
-		assert.deepEqual(result, {
-			packages: ["npm:pi-sage", "npm:pi-memory"],
-			extensions: ["/project/extension.ts", "/shared/extension.ts", "/global/extension.ts"],
-			skills: ["/project/skill.md", "/shared/skill.md", "/global/skill.md"],
-		});
+		assert.deepEqual(result.packages, ["npm:pi-sage", "npm:pi-memory"]);
+		assert.deepEqual(result.packageLoadSpecs, ["npm:pi-sage", "npm:pi-memory"]);
+		assert.deepEqual(result.extensions, [
+			"/project/extension.ts",
+			"/shared/extension.ts",
+			"/global/extension.ts",
+		]);
+		assert.deepEqual(result.skills, ["/project/skill.md", "/shared/skill.md", "/global/skill.md"]);
 		assert.deepEqual(loadPiSettingsExtensions(tempDir), result.extensions);
 		assert.deepEqual(loadPiSettingsSkills(tempDir), result.skills);
+	});
+
+	it("builds spawn extension load specs from explicit extensions and package load specs", () => {
+		const packageRoot = join(tempDir, ".pi", "npm", "node_modules", "@juicesharp", "rpiv-web-tools");
+		mkdirSync(packageRoot, { recursive: true });
+		writeProjectSettings(tempDir, {
+			packages: ["npm:@juicesharp/rpiv-web-tools", "npm:pi-memory"],
+			extensions: ["/project/extension.ts"],
+		});
+
+		const resources = loadPiSettingsResources(tempDir);
+
+		assert.deepEqual(buildPiExtensionLoadSpecs(resources), [
+			"/project/extension.ts",
+			packageRoot,
+			"npm:pi-memory",
+		]);
+		assert.deepEqual(buildPiExtensionLoadSpecs(resources, ["npm:@juicesharp/rpiv-web-tools"]), [
+			"/project/extension.ts",
+			"npm:pi-memory",
+		]);
+		assert.deepEqual(
+			buildPiExtensionLoadSpecs(resources, ["npm:pi-memory", "/project/extension.ts"]),
+			[packageRoot],
+		);
+	});
+
+	it("allows package exclusions by identity or resolved load spec", () => {
+		const packageRoot = join(tempDir, ".pi", "npm", "node_modules", "@juicesharp", "rpiv-web-tools");
+		mkdirSync(packageRoot, { recursive: true });
+		writeProjectSettings(tempDir, {
+			packages: ["npm:@juicesharp/rpiv-web-tools@1.18.2"],
+		});
+
+		const resources = loadPiSettingsResources(tempDir);
+
+		assert.deepEqual(resources.packages, ["npm:@juicesharp/rpiv-web-tools@1.18.2"]);
+		assert.deepEqual(buildPiExtensionLoadSpecs(resources, ["npm:@juicesharp/rpiv-web-tools"]), []);
+		assert.deepEqual(buildPiExtensionLoadSpecs(resources, [packageRoot]), []);
 	});
 
 	it("resolves relative project and global extension and skill paths from their settings directories", () => {

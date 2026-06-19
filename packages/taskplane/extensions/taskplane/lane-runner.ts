@@ -40,7 +40,7 @@ import {
 	type AgentHostResult,
 } from "./agent-host.ts";
 import { createContextKillPolicy } from "./context-kill-policy.ts";
-import { loadPiSettingsResources, filterExcludedExtensions } from "./settings-loader.ts";
+import { buildPiExtensionLoadSpecs, loadPiSettingsResources } from "./settings-loader.ts";
 
 import { appendAgentEvent, writeLaneSnapshot } from "./process-registry.ts";
 
@@ -733,8 +733,8 @@ export async function executeTaskV2(
 
 		// TP-180/TP-199: Forward settings resources to worker agent.
 		const settingsResources = loadPiSettingsResources(config.stateRoot);
-		const workerExtensions = filterExcludedExtensions(
-			[...settingsResources.extensions, ...settingsResources.packages],
+		const workerExtensions = buildPiExtensionLoadSpecs(
+			settingsResources,
 			config.workerExcludeExtensions ?? [],
 		);
 
@@ -1046,60 +1046,64 @@ export async function executeTaskV2(
 		});
 
 		try {
-			spawned = spawnAgent(hostOpts, (event) => {
-				try {
-					if (event.type === "compaction_started") {
-						contextKillPolicy.observeAgentEvent({ type: "compaction_started" });
-						return;
-					}
-
-					if (event.type !== "compaction_finished") return;
-
-					const payload = event.payload;
-					const policyPayload: Record<string, unknown> = {};
-					if (isRecord(payload)) {
-						if ("success" in payload) policyPayload.success = payload.success;
-						if ("status" in payload) policyPayload.status = payload.status;
-						if ("willRetry" in payload) policyPayload.willRetry = payload.willRetry;
-						if ("aborted" in payload) policyPayload.aborted = payload.aborted;
-					}
-					contextKillPolicy.observeAgentEvent({ type: event.type, payload: policyPayload });
-				} catch {
-					/* non-fatal: event callback must never crash the agent host */
-				}
-			}, (telemetry) => {
-				try {
-					// Context pressure check
-					if (telemetry.contextUsage) {
-						const pct = telemetry.contextUsage.percent;
-						if (pct >= config.warnPercent) {
-							const msg = `Wrap up (context ${Math.round(pct)}%)`;
-							try {
-								if (!existsSync(wrapUpFile)) writeFileSync(wrapUpFile, msg);
-							} catch {
-								/* best effort: context kill policy must still observe this sample */
-							}
+			spawned = spawnAgent(
+				hostOpts,
+				(event) => {
+					try {
+						if (event.type === "compaction_started") {
+							contextKillPolicy.observeAgentEvent({ type: "compaction_started" });
+							return;
 						}
-						contextKillPolicy.observeContextPercent(pct);
-					}
 
-					iterationTelemetry = telemetry;
-					lastTelemetry = telemetry;
-					// Emit lane snapshot
-					emitSnapshot(
-						config,
-						taskId,
-						segmentId,
-						"running",
-						telemetry,
-						statusPath,
-						reviewerStatePath,
-						snapshotSegmentCtx,
-					);
-				} catch {
-					/* non-fatal: telemetry callback must never crash the engine */
-				}
-			});
+						if (event.type !== "compaction_finished") return;
+
+						const payload = event.payload;
+						const policyPayload: Record<string, unknown> = {};
+						if (isRecord(payload)) {
+							if ("success" in payload) policyPayload.success = payload.success;
+							if ("status" in payload) policyPayload.status = payload.status;
+							if ("willRetry" in payload) policyPayload.willRetry = payload.willRetry;
+							if ("aborted" in payload) policyPayload.aborted = payload.aborted;
+						}
+						contextKillPolicy.observeAgentEvent({ type: event.type, payload: policyPayload });
+					} catch {
+						/* non-fatal: event callback must never crash the agent host */
+					}
+				},
+				(telemetry) => {
+					try {
+						// Context pressure check
+						if (telemetry.contextUsage) {
+							const pct = telemetry.contextUsage.percent;
+							if (pct >= config.warnPercent) {
+								const msg = `Wrap up (context ${Math.round(pct)}%)`;
+								try {
+									if (!existsSync(wrapUpFile)) writeFileSync(wrapUpFile, msg);
+								} catch {
+									/* best effort: context kill policy must still observe this sample */
+								}
+							}
+							contextKillPolicy.observeContextPercent(pct);
+						}
+
+						iterationTelemetry = telemetry;
+						lastTelemetry = telemetry;
+						// Emit lane snapshot
+						emitSnapshot(
+							config,
+							taskId,
+							segmentId,
+							"running",
+							telemetry,
+							statusPath,
+							reviewerStatePath,
+							snapshotSegmentCtx,
+						);
+					} catch {
+						/* non-fatal: telemetry callback must never crash the engine */
+					}
+				},
+			);
 		} catch (error) {
 			contextKillPolicy.dispose();
 			throw error;

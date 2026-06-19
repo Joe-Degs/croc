@@ -1,17 +1,17 @@
-export type Command =
-	| "init"
-	| "apply"
-	| "doctor"
-	| "start"
-	| "attach"
-	| "dashboard"
-	| "taskplane"
-	| "config"
-	| "help"
-	| "version";
+import {
+	type CrocCommandName,
+	type TaskplaneCommandName,
+	isCrocCommandName,
+	isTaskplaneCommandName,
+	printHelp,
+} from "./commands.ts";
+
+export { printHelp };
+
+export type Command = CrocCommandName | "help";
 export type DashboardAction = "start" | "stop" | "status";
 export type ConfigAction = "show";
-export type TaskplaneAction = "status" | "summary" | "integrate";
+export type TaskplaneAction = TaskplaneCommandName;
 
 export interface Args {
 	command: Command;
@@ -25,6 +25,7 @@ export interface Args {
 	taskplaneAction?: TaskplaneAction;
 	taskplaneArgs?: string[];
 	help: boolean;
+	helpPath?: string[];
 	diagnostics: Array<{ type: "warning" | "error"; message: string }>;
 }
 
@@ -50,6 +51,14 @@ export function parseArgs(rawArgs: string[]): Args {
 	for (let index = 0; index < rawArgs.length; index++) {
 		const arg = rawArgs[index];
 		if (delegatingTaskplane) {
+			if (arg === "--help" || arg === "-h") {
+				help = true;
+				continue;
+			}
+			if (arg === "--no-tmux") {
+				disableTmux = true;
+				continue;
+			}
 			if (arg === "--config") {
 				const value = readValue(rawArgs, index, arg, diagnostics);
 				if (value) {
@@ -109,24 +118,36 @@ export function parseArgs(rawArgs: string[]): Args {
 		if (arg === "taskplane") delegatingTaskplane = true;
 	}
 
-	const first = positionals[0];
-	const command = toCommand(first, help);
+	const command = toCommand(positionals[0], help);
+	const helpRequested = help || command === "help" || (command === "taskplane" && positionals[1] === "help");
 	const args: Args = {
 		command,
 		cwd,
 		force,
 		disableTmux,
-		help,
+		help: helpRequested,
 		diagnostics,
 	};
 	if (configPath) args.configPath = configPath;
+	if (helpRequested) args.helpPath = resolveHelpPath(positionals, command);
 
 	if (command === "dashboard") {
 		const action = positionals[1];
 		args.dashboardAction = action === "start" || action === "stop" || action === "status" ? action : "status";
 	} else if (command === "taskplane") {
-		const action = positionals[1] || "status";
-		if (action === "status" || action === "summary" || action === "integrate") {
+		const action = positionals[1];
+		if (!action) {
+			args.taskplaneArgs = ["status"];
+		} else if (action === "help") {
+			const topic = positionals[2];
+			if (topic && !isTaskplaneCommandName(topic)) {
+				diagnostics.push({ type: "error", message: `Unknown taskplane action: ${topic}` });
+				args.taskplaneAction = "status";
+				args.taskplaneArgs = ["status"];
+			} else {
+				args.taskplaneArgs = positionals.slice(1);
+			}
+		} else if (isTaskplaneCommandName(action)) {
 			args.taskplaneAction = action;
 			args.taskplaneArgs = positionals.slice(1).length > 0 ? positionals.slice(1) : ["status"];
 		} else {
@@ -145,48 +166,24 @@ export function parseArgs(rawArgs: string[]): Args {
 
 function toCommand(value: string | undefined, help: boolean): Command {
 	if (help && !value) return "help";
-	if (
-		value === "init" ||
-		value === "apply" ||
-		value === "doctor" ||
-		value === "start" ||
-		value === "attach" ||
-		value === "dashboard" ||
-		value === "taskplane" ||
-		value === "config" ||
-		value === "version"
-	) {
+	if (isCrocCommandName(value)) {
 		return value;
 	}
 	return value ? "help" : "help";
 }
 
-export function printHelp(): void {
-	console.log(`croc - Taskplane launcher and profile manager for Pi
-
-Usage:
-  croc init [--force] [--config <path>]
-  croc apply [--config <path>]
-  croc doctor [--config <path>]
-  croc start [target] [--config <path>] [--no-tmux]
-  croc attach [--config <path>]
-  croc dashboard <start|stop|status> [--config <path>]
-  croc taskplane <status|summary|integrate> [--config <path>]
-  croc config show [--config <path>]
-
-Options:
-  --config <path>  Use a specific croc.yaml, croc.yml, or croc.json path
-  --cwd <path>     Run against a specific project directory
-  --force          Overwrite files where supported
-  --no-tmux        Start Pi directly even if tmux is enabled
-  --help, -h       Show this help
-  --version, -v    Show version
-
-Examples:
-  croc init
-  croc apply
-  croc start all
-  croc dashboard start
-  croc taskplane status
-`);
+function resolveHelpPath(positionals: string[], command: Command): string[] {
+	if (positionals[0] === "help") {
+		return positionals.slice(1, 3);
+	}
+	if (positionals[0] === "taskplane" && positionals[1] === "help") {
+		const action = positionals[2];
+		return isTaskplaneCommandName(action) ? ["taskplane", action] : ["taskplane"];
+	}
+	if (command === "help") return [];
+	if (command === "taskplane") {
+		const action = positionals[1];
+		return isTaskplaneCommandName(action) ? [command, action] : [command];
+	}
+	return [command];
 }

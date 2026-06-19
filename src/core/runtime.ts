@@ -29,6 +29,8 @@ export interface TmuxPane {
 	currentPath: string;
 }
 
+export type TaskplaneLiveAction = "start" | "pause" | "resume" | "abort";
+
 const ACTIVE_BATCH_PHASES = new Set(["planning", "executing", "merging", "paused", "resuming"]);
 const TASK_ID_TARGET_PATTERN = /^[A-Z]+-\d+$/;
 
@@ -71,6 +73,27 @@ export function buildPiArgs(config: CrocConfig, target?: string): string[] {
 export function buildOrchCommand(config: CrocConfig, target?: string): string | undefined {
 	const orchTarget = resolveOrchTarget(config, target);
 	return orchTarget ? `/orch ${orchTarget}` : undefined;
+}
+
+export function buildTaskplaneControlCommand(action: TaskplaneLiveAction, args: string[], config: CrocConfig): string {
+	if (action === "start") {
+		const target = args.join(" ").trim();
+		const command = buildOrchCommand(config, target || undefined);
+		if (!command) throw new Error("taskplane start requires a target");
+		return command;
+	}
+	if (action === "pause") {
+		if (args.length > 0) throw new Error("taskplane pause does not accept arguments");
+		return "/orch-pause";
+	}
+	if (action === "resume") {
+		const unsupported = args.filter((arg) => arg !== "--force");
+		if (unsupported.length > 0) throw new Error(`Unsupported taskplane resume argument: ${unsupported[0]}`);
+		return args.includes("--force") ? "/orch-resume --force" : "/orch-resume";
+	}
+	const unsupported = args.filter((arg) => arg !== "--hard");
+	if (unsupported.length > 0) throw new Error(`Unsupported taskplane abort argument: ${unsupported[0]}`);
+	return args.includes("--hard") ? "/orch-abort --hard" : "/orch-abort";
 }
 
 function tmuxSessionExists(session: string): boolean {
@@ -147,9 +170,7 @@ function hasActiveBatch(cwd: string): BatchStateSummary | undefined {
 	return ACTIVE_BATCH_PHASES.has(state.phase) ? state : undefined;
 }
 
-function dispatchTargetToTmux(session: string, target: string, config: CrocConfig, cwd: string): void {
-	const command = buildOrchCommand(config, target);
-	if (!command) return;
+export function dispatchSlashCommandToTmux(session: string, command: string, config: CrocConfig, cwd: string): void {
 	const pane = resolveCrocTmuxPane(session, config.pi.name, cwd);
 	const result = spawnProcessSync("tmux", ["send-keys", "-t", pane.paneId, command, "C-m"], {
 		encoding: "utf-8",
@@ -159,6 +180,12 @@ function dispatchTargetToTmux(session: string, target: string, config: CrocConfi
 		throw new Error(result.stderr.trim() || `Failed to dispatch ${command} to tmux pane ${pane.paneId}`);
 	}
 	console.log(`Dispatched ${command} to tmux pane ${pane.paneId}`);
+}
+
+function dispatchTargetToTmux(session: string, target: string, config: CrocConfig, cwd: string): void {
+	const command = buildOrchCommand(config, target);
+	if (!command) return;
+	dispatchSlashCommandToTmux(session, command, config, cwd);
 }
 
 export function attachTmux(session: string): void {

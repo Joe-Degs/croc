@@ -27,7 +27,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync, renameSync, unlinkS
 import { join, dirname } from "path";
 import { spawn as nodeSpawn } from "child_process";
 import { resolvePiCliPath, resolveTaskplaneAgentTemplate } from "./path-resolver.ts";
-import { loadPiSettingsResources, filterExcludedExtensions } from "./settings-loader.ts";
+import { buildPiExtensionLoadSpecs, loadPiSettingsResources } from "./settings-loader.ts";
 import { randomBytes } from "crypto";
 import { buildExpansionRequestId, type SegmentExpansionRequest } from "./types.ts";
 
@@ -625,8 +625,8 @@ export default function (pi: ExtensionAPI) {
 			} catch {
 				/* ignore malformed */
 			}
-			const filteredReviewerExtensions = filterExcludedExtensions(
-				[...settingsResources.extensions, ...settingsResources.packages],
+			const filteredReviewerExtensions = buildPiExtensionLoadSpecs(
+				settingsResources,
 				reviewerExclusions,
 			);
 			for (const extension of filteredReviewerExtensions) {

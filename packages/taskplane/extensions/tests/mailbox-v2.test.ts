@@ -9,10 +9,10 @@
 
 import { describe, it, beforeEach, afterEach } from "node:test";
 import { expect } from "./expect.ts";
-import { mkdtempSync, existsSync, readFileSync, rmSync, readdirSync } from "fs";
-import { join, dirname } from "path";
-import { tmpdir } from "os";
-import { fileURLToPath } from "url";
+import { mkdtempSync, existsSync, readFileSync, rmSync, readdirSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 
 import {
 	writeOutboxMessage,
@@ -548,7 +548,6 @@ describe("12.x: Dashboard V2 source contracts", () => {
 
 	it("12.3: mergeV2LaneSnapshot reads nested worker.* fields", () => {
 		const fnIdx = appSrc.indexOf("function mergeV2LaneSnapshot");
-		const block = appSrc.slice(fnIdx, fnIdx + 800);
 		// Must read from nested v2snap.worker (not flat v2snap.workerStatus)
 		const bigBlock = appSrc.slice(fnIdx, fnIdx + 1200);
 		expect(bigBlock).toContain("v2snap.worker");
@@ -574,7 +573,7 @@ describe("12.x: Dashboard V2 source contracts", () => {
 
 	it("12.5: V2 cursor handles sliding window — new tail events appended", () => {
 		const fnIdx = appSrc.indexOf("function renderV2AgentEvents");
-		const block = appSrc.slice(fnIdx, fnIdx + 2000);
+		const block = appSrc.slice(fnIdx, fnIdx + 2600);
 		// Must have: cursor not found -> full re-render logic
 		expect(block).toContain("cursorIdx === -1");
 		// Must have: append only new events after cursor

@@ -424,6 +424,83 @@ export function persistRuntimeState(
 	}
 }
 
+function mergeStringLists(first: string[], second: string[]): string[] {
+	const merged = [...first];
+	const seen = new Set(merged);
+	for (const value of second) {
+		if (seen.has(value)) continue;
+		seen.add(value);
+		merged.push(value);
+	}
+	return merged;
+}
+
+function stringifyPersistedBatchState(state: PersistedBatchState): string {
+	const { _extraFields, ...knownState } = state;
+	const output = knownState as Record<string, unknown>;
+	if (_extraFields) {
+		for (const [key, value] of Object.entries(_extraFields)) {
+			if (!(key in output)) output[key] = value;
+		}
+	}
+	return JSON.stringify(output, null, 2);
+}
+
+export function persistEngineWorkerFailureState(
+	reason: string,
+	batchState: OrchBatchRuntimeState,
+	repoRoot: string,
+): void {
+	let persistedState: PersistedBatchState | null = null;
+	try {
+		persistedState = loadBatchState(repoRoot);
+	} catch {
+		persistedState = null;
+	}
+
+	const runtimeBatchId = batchState.batchId.trim();
+	if (persistedState && (runtimeBatchId.length === 0 || persistedState.batchId === runtimeBatchId)) {
+		const now = Date.now();
+		const errors = mergeStringLists(persistedState.errors, batchState.errors);
+		const lastErrorMessage = errors[errors.length - 1] ?? `Engine worker failure: ${reason}`;
+		const blockedTaskIds = mergeStringLists(persistedState.blockedTaskIds, [
+			...batchState.blockedTaskIds,
+		]);
+		const failedState: PersistedBatchState = {
+			...persistedState,
+			phase: "failed",
+			updatedAt: now,
+			endedAt: batchState.endedAt ?? persistedState.endedAt ?? now,
+			currentWaveIndex: Math.max(persistedState.currentWaveIndex, batchState.currentWaveIndex),
+			totalWaves: Math.max(persistedState.totalWaves, batchState.totalWaves),
+			totalTasks: Math.max(persistedState.totalTasks, batchState.totalTasks),
+			succeededTasks: Math.max(persistedState.succeededTasks, batchState.succeededTasks),
+			failedTasks: Math.max(persistedState.failedTasks, batchState.failedTasks),
+			skippedTasks: Math.max(persistedState.skippedTasks, batchState.skippedTasks),
+			blockedTasks: Math.max(persistedState.blockedTasks, batchState.blockedTasks),
+			blockedTaskIds,
+			lastError: { code: reason, message: lastErrorMessage },
+			errors,
+			resilience: persistedState.resilience,
+			diagnostics: persistedState.diagnostics,
+			segments: persistedState.segments,
+		};
+		saveBatchState(stringifyPersistedBatchState(failedState), repoRoot);
+		return;
+	}
+
+	const taskIds = batchState.currentLanes.flatMap((lane) => lane.tasks.map((task) => task.taskId));
+	persistRuntimeState(
+		reason,
+		batchState,
+		taskIds.length > 0 ? [taskIds] : [],
+		batchState.currentLanes,
+		[],
+		null,
+		repoRoot,
+	);
+}
+
 // ── State Validation ─────────────────────────────────────────────────
 
 /** All valid OrchBatchPhase values for validation. */

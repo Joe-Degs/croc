@@ -3441,6 +3441,20 @@ function loadIntegrationApi() {
 	return taskplaneModule("integration.ts");
 }
 
+function loadCliHistoryApi() {
+	return taskplaneModule("cli-history.ts");
+}
+
+function loadCliMailboxApi() {
+	return taskplaneModule("cli-mailbox.ts");
+}
+
+function loadCliMailboxCommandsApi() {
+	return taskplaneModule("cli-mailbox-commands.ts");
+}
+
+const TERMINAL_BATCH_PHASES = new Set(["idle", "completed", "failed", "stopped"]);
+
 function formatDurationMs(ms) {
 	if (!Number.isFinite(ms) || ms < 0) return "unknown";
 	const seconds = Math.round(ms / 1000);
@@ -3578,6 +3592,157 @@ function cmdSummary() {
 	}
 }
 
+function parseHistoryArgs(args) {
+	const options = { limit: undefined, json: false, batch: undefined, agents: false, events: false };
+	for (let index = 0; index < args.length; index++) {
+		const arg = args[index];
+		if (arg === "--json") {
+			options.json = true;
+		} else if (arg === "--agents") {
+			options.agents = true;
+		} else if (arg === "--events") {
+			options.events = true;
+		} else if (arg === "--limit") {
+			const value = args[++index];
+			if (!value) die("--limit requires a value");
+			const limit = Number.parseInt(value, 10);
+			if (!Number.isFinite(limit) || limit < 1) die("--limit must be a positive integer");
+			options.limit = limit;
+		} else if (arg === "--batch") {
+			const value = args[++index];
+			if (!value) die("--batch requires a value");
+			options.batch = value;
+		} else {
+			die(`Unknown history option: ${arg}`);
+		}
+	}
+	return options;
+}
+
+function cmdHistory(args) {
+	const projectRoot = process.cwd();
+	const api = loadCliHistoryApi();
+	const options = parseHistoryArgs(args);
+	const history = api.loadHistoryEntries(projectRoot);
+	if (options.json) {
+		const payload = options.batch
+			? api.resolveHistoryBatch(history, options.batch)
+			: history.slice(0, options.limit ?? history.length);
+		console.log(JSON.stringify(payload, null, 2));
+		return;
+	}
+	if (options.batch) {
+		const entry = api.resolveHistoryBatch(history, options.batch);
+		if (!entry) die(`Unknown Taskplane batch: ${options.batch}`);
+		console.log(api.formatBatchDetail(projectRoot, entry, { agents: options.agents, events: options.events }));
+		return;
+	}
+	console.log(api.formatHistoryList(history, { limit: options.limit }));
+}
+
+function parseMailboxArgs(args) {
+	const options = { batchId: "latest", agentId: undefined, pending: false, json: false };
+	let batchSet = false;
+	for (let index = 0; index < args.length; index++) {
+		const arg = args[index];
+		if (arg === "--json") {
+			options.json = true;
+		} else if (arg === "--pending") {
+			options.pending = true;
+		} else if (arg === "--agent") {
+			const value = args[++index];
+			if (!value) die("--agent requires a value");
+			options.agentId = value;
+		} else if (arg.startsWith("-")) {
+			die(`Unknown mailbox option: ${arg}`);
+		} else if (!batchSet) {
+			options.batchId = arg;
+			batchSet = true;
+		} else {
+			die(`Unexpected mailbox argument: ${arg}`);
+		}
+	}
+	return options;
+}
+
+function parseRepliesArgs(args) {
+	const options = { batchId: "latest", agentId: undefined };
+	for (let index = 0; index < args.length; index++) {
+		const arg = args[index];
+		if (arg === "--batch") {
+			const value = args[++index];
+			if (!value) die("--batch requires a value");
+			options.batchId = value;
+		} else if (arg === "--agent") {
+			const value = args[++index];
+			if (!value) die("--agent requires a value");
+			options.agentId = value;
+		} else {
+			die(`Unknown replies option: ${arg}`);
+		}
+	}
+	return options;
+}
+
+function resolveMailboxBatchId(projectRoot, requestedBatchId) {
+	if (requestedBatchId !== "latest") return requestedBatchId;
+	const { loadBatchHistory, loadBatchState } = loadPersistenceApi();
+	const state = loadBatchState(projectRoot);
+	if (state && !TERMINAL_BATCH_PHASES.has(state.phase)) return state.batchId;
+	return loadBatchHistory(projectRoot)[0]?.batchId;
+}
+
+function cmdMailbox(args) {
+	const projectRoot = process.cwd();
+	const api = loadCliMailboxApi();
+	const parsed = parseMailboxArgs(args);
+	const batchId = resolveMailboxBatchId(projectRoot, parsed.batchId);
+	if (!batchId) {
+		console.log("No Taskplane batch history found.");
+		return;
+	}
+	const view = api.loadMailboxView(projectRoot, batchId);
+	if (parsed.json) {
+		console.log(JSON.stringify(view, null, 2));
+		return;
+	}
+	console.log(api.formatMailboxSummary(view, { agentId: parsed.agentId, pending: parsed.pending }));
+}
+
+function cmdReplies(args) {
+	const projectRoot = process.cwd();
+	const api = loadCliMailboxApi();
+	const parsed = parseRepliesArgs(args);
+	const batchId = resolveMailboxBatchId(projectRoot, parsed.batchId);
+	if (!batchId) {
+		console.log("No Taskplane batch history found.");
+		return;
+	}
+	const view = api.loadMailboxView(projectRoot, batchId);
+	console.log(api.formatReplies(view, { agentId: parsed.agentId }));
+}
+
+function cmdTell(args) {
+	const [agentId, ...contentParts] = args;
+	if (!agentId || contentParts.length === 0) die("Usage: taskplane tell <agentId> <text>");
+	const result = loadCliMailboxCommandsApi().sendMailboxMessageFromCli(
+		process.cwd(),
+		agentId,
+		contentParts.join(" "),
+		"steer",
+	);
+	if (!result.ok) die(result.message);
+	console.log(result.message);
+}
+
+function cmdBroadcast(args) {
+	const content = args.join(" ").trim();
+	if (!content) die("Usage: taskplane broadcast <text>");
+	const result = loadCliMailboxCommandsApi().broadcastMailboxMessageFromCli(process.cwd(), content, "info");
+	if (!result.ok) die(result.message);
+	console.log(result.message);
+}
+
 function getExecutionContext(projectRoot) {
 	const { buildExecutionContext } = loadWorkspaceApi();
 	const { loadOrchestratorConfig, loadTaskRunnerConfig } = loadConfigApi();
@@ -3619,80 +3784,247 @@ function cmdIntegrate(args) {
 
 // ─── help ───────────────────────────────────────────────────────────────────
 
+const TASKPLANE_HELP_COMMANDS = [
+	{
+		name: "init",
+		summary: "Scaffold Taskplane config in the current project",
+		usage: ["taskplane init [options]"],
+		optionsTitle: "Init options",
+		options: [
+			{ flags: "--preset <name>", description: "Use a preset: minimal, full" },
+			{ flags: "--tasks-root <path>", description: "Relative tasks directory to use" },
+			{ flags: "--no-examples", description: "Skip example tasks scaffolding" },
+			{ flags: "--include-examples", description: "With --tasks-root, include example tasks" },
+			{ flags: "--force", description: "Overwrite existing files without prompting" },
+			{ flags: "--dry-run", description: "Show what would be created without writing" },
+		],
+		examples: [
+			"taskplane init",
+			"taskplane init --preset full",
+			"taskplane init --preset full --tasks-root docs/task-management",
+			"taskplane init --dry-run",
+		],
+	},
+	{
+		name: "doctor",
+		summary: "Validate installation and project configuration",
+		usage: ["taskplane doctor"],
+		examples: ["taskplane doctor"],
+	},
+	{
+		name: "config",
+		summary: "Manage CLI config utilities",
+		usage: ["taskplane config [--save-as-defaults]"],
+		optionsTitle: "Config options",
+		options: [
+			{
+				flags: "--save-as-defaults",
+				description: "Save current worker/reviewer/merger settings as global init defaults",
+			},
+		],
+		examples: ["taskplane config --save-as-defaults"],
+	},
+	{
+		name: "status",
+		summary: "Show current persisted batch status",
+		usage: ["taskplane status"],
+		examples: ["taskplane status"],
+	},
+	{
+		name: "summary",
+		summary: "Show latest persisted batch summary",
+		usage: ["taskplane summary"],
+		examples: ["taskplane summary"],
+	},
+	{
+		name: "history",
+		summary: "Show persisted batch history and details",
+		usage: ["taskplane history [--limit <n>] [--json]", "taskplane history --batch <id|latest> [--agents] [--events]"],
+		optionsTitle: "History options",
+		options: [
+			{ flags: "--limit <n>", description: "Limit compact history output" },
+			{ flags: "--json", description: "Print JSON output" },
+			{ flags: "--batch <id|latest>", description: "Show a specific batch" },
+			{ flags: "--agents", description: "Include runtime agent snapshots with --batch" },
+			{ flags: "--events", description: "Include lifecycle events with --batch" },
+		],
+		examples: ["taskplane history", "taskplane history --batch latest", "taskplane history --batch latest --agents"],
+	},
+	{
+		name: "mailbox",
+		summary: "Inspect persisted agent mailbox state",
+		usage: ["taskplane mailbox [<id|latest>] [--agent <id>] [--pending] [--json]"],
+		optionsTitle: "Mailbox options",
+		options: [
+			{ flags: "--agent <id>", description: "Show one agent mailbox" },
+			{ flags: "--pending", description: "Only show pending messages" },
+			{ flags: "--json", description: "Print JSON output" },
+		],
+		examples: ["taskplane mailbox latest", "taskplane mailbox latest --agent agent-1", "taskplane mailbox latest --pending"],
+	},
+	{
+		name: "replies",
+		summary: "Show agent reply and escalation history",
+		usage: ["taskplane replies [--batch <id|latest>] [--agent <id>]"],
+		optionsTitle: "Replies options",
+		options: [
+			{ flags: "--batch <id|latest>", description: "Read replies from a specific batch" },
+			{ flags: "--agent <id>", description: "Show one agent's replies" },
+		],
+		examples: ["taskplane replies --batch latest", "taskplane replies --batch latest --agent agent-1"],
+	},
+	{
+		name: "tell",
+		summary: "Send a mailbox message to one active agent",
+		usage: ["taskplane tell <agentId> <text>"],
+		examples: ["taskplane tell agent-1 \"wrap up\""],
+	},
+	{
+		name: "broadcast",
+		summary: "Send a mailbox message to all active agents",
+		usage: ["taskplane broadcast <text>"],
+		examples: ["taskplane broadcast \"wrap up\""],
+	},
+	{
+		name: "integrate",
+		summary: "Integrate a completed batch into the working branch",
+		usage: ["taskplane integrate [--ff|--merge|--pr]"],
+		optionsTitle: "Integrate options",
+		options: [
+			{ flags: "--ff, --fast-forward", description: "Fast-forward only" },
+			{ flags: "--merge", description: "Create a merge commit" },
+			{ flags: "--pr", description: "Create a pull request" },
+		],
+		examples: ["taskplane integrate", "taskplane integrate --pr"],
+	},
+	{
+		name: "version",
+		summary: "Show version information",
+		usage: ["taskplane version", "taskplane --version"],
+	},
+	{
+		name: "dashboard",
+		summary: "Launch the web-based orchestrator dashboard",
+		usage: ["taskplane dashboard [options]"],
+		optionsTitle: "Dashboard options",
+		options: [
+			{ flags: "--host <address>", description: "Host/interface to bind" },
+			{ flags: "--port <number>", description: "Port to listen on" },
+			{ flags: "--no-open", description: "Do not auto-open browser" },
+		],
+		examples: ["taskplane dashboard", "taskplane dashboard --port 3000", "taskplane dashboard --host 0.0.0.0"],
+	},
+	{
+		name: "uninstall",
+		summary: "Remove Taskplane project files and/or package install",
+		usage: ["taskplane uninstall [options]"],
+		optionsTitle: "Uninstall options",
+		options: [
+			{ flags: "--dry-run", description: "Show what would be removed" },
+			{ flags: "--yes, -y", description: "Skip confirmation prompts" },
+			{ flags: "--package", description: "Also remove installed package via pi remove" },
+			{ flags: "--package-only", description: "Only remove installed package" },
+			{ flags: "--local", description: "Force package uninstall from project-local scope" },
+			{ flags: "--global", description: "Force package uninstall from global scope" },
+			{ flags: "--remove-tasks", description: "Also remove task area directories" },
+			{ flags: "--all", description: "Equivalent to --package + --remove-tasks" },
+		],
+		examples: ["taskplane uninstall --dry-run", "taskplane uninstall --package --yes"],
+	},
+	{
+		name: "help",
+		summary: "Show help information",
+		usage: ["taskplane help", "taskplane help <command>", "taskplane <command> --help"],
+	},
+];
+
+function findHelpCommand(name) {
+	return TASKPLANE_HELP_COMMANDS.find((command) => command.name === name);
+}
+
+function formatHelpRows(rows) {
+	if (!rows || rows.length === 0) return [];
+	const width = rows.reduce((max, row) => Math.max(max, row.flags.length), 0);
+	return rows.map((row) => `  ${row.flags.padEnd(width)}  ${row.description}`);
+}
+
+function appendHelpSection(lines, title, body) {
+	if (!body || body.length === 0) return;
+	lines.push("", `${c.bold}${title}:${c.reset}`, ...body);
+}
+
+function commandRows() {
+	return TASKPLANE_HELP_COMMANDS.map((command) => ({
+		flags: `${c.cyan}${command.name}${c.reset}`,
+		description: command.summary,
+	}));
+}
+
+function rootOptionSections() {
+	const sections = [];
+	for (const command of TASKPLANE_HELP_COMMANDS) {
+		if (!command.optionsTitle || !command.options) continue;
+		sections.push({ title: command.optionsTitle, rows: command.options });
+	}
+	return sections;
+}
+
 function showHelp() {
 	const version = getPackageVersion();
-	console.log(`
-${c.bold}taskplane${c.reset} v${version} — AI agent orchestration for pi
+	const lines = [
+		"",
+		`${c.bold}taskplane${c.reset} v${version} — AI agent orchestration for pi`,
+		"",
+		`${c.bold}Usage:${c.reset}`,
+		"  taskplane <command> [options]",
+	];
+	appendHelpSection(lines, "Commands", formatHelpRows(commandRows()));
+	for (const section of rootOptionSections()) {
+		appendHelpSection(lines, section.title, formatHelpRows(section.rows));
+	}
+	appendHelpSection(lines, "Examples", [
+		"  taskplane init                        # Interactive project setup",
+		"  taskplane init --preset full          # Quick setup with defaults",
+		"  taskplane config --save-as-defaults   # Save current agent settings as init defaults",
+		"  taskplane status                      # Show current batch state",
+		"  taskplane summary                     # Show latest batch summary",
+		"  taskplane history                     # Show persisted batch history",
+		"  taskplane history --batch latest      # Show latest batch detail",
+		"  taskplane mailbox latest              # Inspect latest mailbox state",
+		"  taskplane replies --batch latest      # Show latest agent replies",
+		"  taskplane tell agent-1 \"wrap up\"     # Send one active agent a directive",
+		"  taskplane broadcast \"wrap up\"        # Broadcast info to active agents",
+		"  taskplane integrate                   # Integrate completed batch",
+		"  taskplane dashboard                   # Launch web dashboard",
+		"  taskplane uninstall --dry-run         # Preview uninstall actions",
+		"  taskplane <command> --help            # Show command help",
+	]);
+	appendHelpSection(lines, "Getting started", [
+		"  1. pi install npm:taskplane           # Install the pi package",
+		"  2. cd my-project && taskplane init    # Scaffold project config",
+		"  3. pi                                 # Start pi, /orch is ready",
+	]);
+	console.log(lines.join("\n"));
+}
 
-${c.bold}Usage:${c.reset}
-  taskplane <command> [options]
+function showCommandHelp(commandName) {
+	const command = findHelpCommand(commandName);
+	if (!command) return false;
+	const lines = [
+		"",
+		`${c.bold}taskplane ${command.name}${c.reset} - ${command.summary}`,
+		"",
+		`${c.bold}Usage:${c.reset}`,
+		...command.usage.map((entry) => `  ${entry}`),
+	];
+	appendHelpSection(lines, command.optionsTitle || "Options", formatHelpRows(command.options || []));
+	appendHelpSection(lines, "Examples", (command.examples || []).map((example) => `  ${example}`));
+	console.log(lines.join("\n"));
+	return true;
+}
 
-${c.bold}Commands:${c.reset}
-  ${c.cyan}init${c.reset}           Scaffold Taskplane config in the current project
-  ${c.cyan}doctor${c.reset}         Validate installation and project configuration
-  ${c.cyan}config${c.reset}         Manage CLI config utilities (e.g., save init defaults)
-  ${c.cyan}status${c.reset}         Show current persisted batch status
-  ${c.cyan}summary${c.reset}        Show latest persisted batch summary
-  ${c.cyan}integrate${c.reset}      Integrate a completed batch into the working branch
-  ${c.cyan}version${c.reset}        Show version information
-  ${c.cyan}dashboard${c.reset}      Launch the web-based orchestrator dashboard
-  ${c.cyan}uninstall${c.reset}      Remove Taskplane project files and/or package install
-  ${c.cyan}help${c.reset}           Show this help message
-
-${c.bold}Init options:${c.reset}
-  --preset <name>       Use a preset: minimal, full
-  --tasks-root <path>   Relative tasks directory to use (e.g. docs/task-management)
-  --no-examples         Skip example tasks scaffolding
-  --include-examples    With --tasks-root, include example tasks (default is skip)
-  --force               Overwrite existing files without prompting
-  --dry-run             Show what would be created without writing
-
-${c.bold}Dashboard options:${c.reset}
-	--host <address>  Host/interface to bind (default: Node.js default)
-	--port <number>   Port to listen on (default: 8099)
-	--no-open         Don't auto-open browser
-
-${c.bold}Config options:${c.reset}
-  --save-as-defaults  Save current project's worker/reviewer/merger model + thinking
-                      settings to global preferences for future taskplane init runs
-
-${c.bold}Integrate options:${c.reset}
-  --ff, --fast-forward  Fast-forward only
-  --merge               Create a merge commit
-  --pr                  Create a pull request
-
-${c.bold}Uninstall options:${c.reset}
-  --dry-run         Show what would be removed
-  --yes, -y         Skip confirmation prompts
-  --package         Also remove installed package via pi remove
-  --package-only    Only remove installed package (skip project cleanup)
-  --local           Force package uninstall from project-local scope
-  --global          Force package uninstall from global scope
-  --remove-tasks    Also remove task area directories
-  --all             Equivalent to --package + --remove-tasks
-
-${c.bold}Examples:${c.reset}
-  taskplane init                        # Interactive project setup
-  taskplane init --preset full          # Quick setup with defaults
-  taskplane init --preset full --tasks-root docs/task-management
-                                        # Use existing task area path
-  taskplane init --dry-run              # Preview what would be created
-	taskplane doctor                      # Check installation health
-	taskplane config --save-as-defaults   # Save current agent settings as init defaults
-	taskplane status                      # Show current batch state
-	taskplane summary                     # Show latest batch summary
-	taskplane integrate                   # Integrate completed batch
-	taskplane dashboard                   # Launch web dashboard
-	taskplane dashboard --port 3000       # Dashboard on custom port
-	taskplane dashboard --host 0.0.0.0    # Bind all interfaces
-	taskplane uninstall --dry-run         # Preview uninstall actions
-  taskplane uninstall --package --yes   # Remove project files + package install
-
-${c.bold}Getting started:${c.reset}
-  1. pi install npm:taskplane       # Install the pi package
-  2. cd my-project && taskplane init    # Scaffold project config
-  3. pi                             # Start pi — /orch is ready
-`);
+function hasHelpFlag(args) {
+	return args.includes("--help") || args.includes("-h");
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -3701,6 +4033,27 @@ ${c.bold}Getting started:${c.reset}
 
 export async function main(argv = process.argv.slice(2)) {
 	const [command, ...args] = argv;
+	if (command === "help") {
+		const topic = args.find((arg) => arg !== "--help" && arg !== "-h");
+		if (!topic) {
+			showHelp();
+			return;
+		}
+		if (!showCommandHelp(topic)) {
+			console.error(`${FAIL} Unknown command: ${topic}`);
+			showHelp();
+			process.exit(1);
+		}
+		return;
+	}
+	if (command && command !== "--help" && command !== "-h" && hasHelpFlag(args)) {
+		if (!showCommandHelp(command)) {
+			console.error(`${FAIL} Unknown command: ${command}`);
+			showHelp();
+			process.exit(1);
+		}
+		return;
+	}
 
 	switch (command) {
 		case "init":
@@ -3717,6 +4070,21 @@ export async function main(argv = process.argv.slice(2)) {
 			break;
 		case "summary":
 			cmdSummary();
+			break;
+		case "history":
+			cmdHistory(args);
+			break;
+		case "mailbox":
+			cmdMailbox(args);
+			break;
+		case "replies":
+			cmdReplies(args);
+			break;
+		case "tell":
+			cmdTell(args);
+			break;
+		case "broadcast":
+			cmdBroadcast(args);
 			break;
 		case "integrate":
 			cmdIntegrate(args);

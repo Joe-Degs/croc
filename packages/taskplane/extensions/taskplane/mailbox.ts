@@ -687,6 +687,7 @@ export function appendMailboxAuditEvent(
 		broadcast?: boolean;
 		reason?: string;
 		retryAfterMs?: number;
+		recipients?: string[];
 	},
 ): void {
 	const eventsPath = join(mailboxRoot(stateRoot, batchId), "events.jsonl");

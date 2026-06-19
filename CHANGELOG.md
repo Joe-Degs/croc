@@ -7,6 +7,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Added Taskplane CLI history, mailbox, replies, tell, and broadcast commands for inspecting persisted batches and steering active agents.
+- Added Croc Taskplane live controls for pausing, resuming, aborting, and starting targeted batches from the `croc taskplane` namespace.
+- Added command-specific help for Croc and bundled Taskplane CLI commands.
+
+### Changed
+
+- Prevented Croc from dispatching a new Taskplane start target into an existing tmux session while an active batch is already running.
+
+### Fixed
+
+- Fixed spawned Taskplane workers, reviewers, and merge agents loading Pi-managed npm package extensions by resolving launch-time package specs to installed package roots while preserving config package source strings.
+- Fixed engine-worker IPC, process error, and exit failure persistence so failures preserve existing task graph, wave plan, diagnostics, and segment state.
+
 ## [0.3.0] - 2026-06-15
 
 ### Added

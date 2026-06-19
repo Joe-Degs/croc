@@ -44,6 +44,7 @@ import {
 	loadBatchState,
 	saveBatchState,
 	detectOrphanSessions,
+	persistEngineWorkerFailureState,
 	updateBatchHistoryIntegration,
 } from "./persistence.ts";
 import {
@@ -1081,6 +1082,15 @@ function resolveEngineWorkerPath(): string {
 	return join(thisDir, "engine-worker-entry.mjs");
 }
 
+function persistEngineFailureState(
+	reason: string,
+	wkData: EngineWorkerData,
+	batchState: import("./types.ts").OrchBatchRuntimeState,
+): void {
+	const stateRoot = wkData.workspaceRoot ?? wkData.cwd;
+	persistEngineWorkerFailureState(reason, batchState, stateRoot);
+}
+
 /**
  * Launch the engine batch in a worker thread.
  *
@@ -1374,7 +1384,7 @@ export function startBatchInWorker(
 				// Persist failed state to disk so dashboard/resume see it.
 				// The engine-worker is dead and can't persist — we must do it here.
 				try {
-					saveBatchState(JSON.stringify(batchState, null, 2), wkData.cwd);
+					persistEngineFailureState("engine-worker-ipc-error", wkData, batchState);
 				} catch {
 					/* best effort */
 				}
@@ -1423,6 +1433,11 @@ export function startBatchInWorker(
 						: undefined,
 			},
 		});
+		try {
+			persistEngineFailureState("engine-worker-error", wkData, batchState);
+		} catch {
+			/* best effort */
+		}
 		settle();
 	});
 
@@ -1471,7 +1486,7 @@ export function startBatchInWorker(
 			});
 			// Persist failed state to disk (engine is dead, can't persist itself)
 			try {
-				saveBatchState(JSON.stringify(batchState, null, 2), wkData.cwd);
+				persistEngineFailureState("engine-worker-exit", wkData, batchState);
 			} catch {
 				/* best effort */
 			}
@@ -5074,6 +5089,7 @@ export default function (pi: ExtensionAPI) {
 				messageType,
 				contentPreview: content.slice(0, 200),
 				broadcast: true,
+				recipients,
 			});
 			return (
 				`✅ Broadcast sent (batch ${state.batchId})\n` +

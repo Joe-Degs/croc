@@ -1,14 +1,25 @@
 import chalk from "chalk";
 import { parseArgs, printHelp } from "./cli/args.ts";
+import { isTaskplaneCommandName, shouldDelegateTaskplaneHelp } from "./cli/commands.ts";
 import { applyConfig } from "./core/apply.ts";
 import { APP_NAME, hasConfiguredPiModels, loadConfig, VERSION, writeDefaultConfig } from "./core/config.ts";
 import { getDashboardState, getDashboardUrl, startDashboard, stopDashboard } from "./core/dashboard.ts";
 import { runDoctor } from "./core/doctor.ts";
 import { ensureHeadroomReady, type HeadroomEnsureResult, isHeadroomEnabled } from "./core/headroom.ts";
 import { redactSecrets } from "./core/redaction.ts";
-import { attachTmux, startPi } from "./core/runtime.ts";
+import {
+	attachTmux,
+	buildTaskplaneControlCommand,
+	dispatchSlashCommandToTmux,
+	startPi,
+	type TaskplaneLiveAction,
+} from "./core/runtime.ts";
 import { resolveTaskplaneCliCwd, runTaskplaneCli } from "./core/taskplane-cli.ts";
 import { resolveRuntimeContext } from "./core/workspace.ts";
+
+type LoadedConfig = ReturnType<typeof loadConfig>;
+
+type ParsedArgs = ReturnType<typeof parseArgs>;
 
 function printDiagnostics(diagnostics: Array<{ type: "warning" | "error"; message: string }>): void {
 	for (const diagnostic of diagnostics) {
@@ -53,17 +64,58 @@ function printHeadroomReady(result: HeadroomEnsureResult): void {
 	console.log(`Headroom ready: ${result.url} (${result.mode}${pid})`);
 }
 
+function isTaskplaneLiveAction(action: string | undefined): action is TaskplaneLiveAction {
+	return action === "start" || action === "pause" || action === "resume" || action === "abort";
+}
+
+function printRequestedHelp(args: ParsedArgs): void {
+	const helpPath = args.helpPath ?? [];
+	const [command, subcommand] = helpPath;
+	if (command === "taskplane" && isTaskplaneCommandName(subcommand) && shouldDelegateTaskplaneHelp(subcommand)) {
+		const result = runTaskplaneCli(args.cwd, [subcommand, "--help"]);
+		if (result.stderr) console.error(result.stderr);
+		if (result.stdout) console.log(result.stdout);
+		return;
+	}
+	printHelp(helpPath);
+}
+
+async function startConfiguredPi(
+	options: { cwd: string; configPath: string; target?: string; disableTmux?: boolean },
+	loaded: LoadedConfig,
+): Promise<void> {
+	const result = applyConfig(options.cwd, loaded.config, loaded.path);
+	const runtime = resolveRuntimeContext(options.cwd, loaded.config);
+	if (isHeadroomEnabled(runtime.config)) {
+		printHeadroomReady(await ensureHeadroomReady(result.runtimeRoot, runtime.config));
+	}
+	if (runtime.config.taskplane.dashboard.enabled) {
+		try {
+			startDashboard(result.runtimeRoot, runtime.config, loaded.path);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			console.error(chalk.yellow(`Warning: dashboard not started: ${message}`));
+		}
+	}
+	await startPi(runtime.config, {
+		cwd: result.runtimeRoot,
+		configPath: options.configPath,
+		target: options.target,
+		disableTmux: options.disableTmux,
+	});
+}
+
 export async function run(rawArgs: string[]): Promise<void> {
 	const args = parseArgs(rawArgs);
 	if (args.diagnostics.length > 0) {
 		printDiagnostics(args.diagnostics);
 		if (args.diagnostics.some((diagnostic) => diagnostic.type === "error")) process.exit(1);
 	}
-
-	if (args.command === "help") {
-		printHelp();
+	if (args.help || args.command === "help") {
+		printRequestedHelp(args);
 		return;
 	}
+
 	if (args.command === "version") {
 		console.log(VERSION);
 		return;
@@ -76,6 +128,27 @@ export async function run(rawArgs: string[]): Promise<void> {
 	}
 
 	if (args.command === "taskplane") {
+		if (isTaskplaneLiveAction(args.taskplaneAction)) {
+			const loaded = loadConfig(args.cwd, args.configPath);
+			const taskplaneArgs = (args.taskplaneArgs ?? []).slice(1);
+			if (args.taskplaneAction === "start") {
+				buildTaskplaneControlCommand(args.taskplaneAction, taskplaneArgs, loaded.config);
+				await startConfiguredPi(
+					{
+						cwd: args.cwd,
+						configPath: loaded.path,
+						target: taskplaneArgs.join(" ").trim() || undefined,
+						disableTmux: args.disableTmux,
+					},
+					loaded,
+				);
+				return;
+			}
+			const runtime = resolveRuntimeContext(args.cwd, loaded.config);
+			const command = buildTaskplaneControlCommand(args.taskplaneAction, taskplaneArgs, runtime.config);
+			dispatchSlashCommandToTmux(runtime.config.runtime.tmux.session, command, runtime.config, runtime.root);
+			return;
+		}
 		const cwd = resolveTaskplaneCliCwd(args.cwd, args.configPath);
 		const result = runTaskplaneCli(cwd, args.taskplaneArgs ?? [args.taskplaneAction ?? "status"]);
 		if (result.stderr) console.error(result.stderr);
@@ -136,25 +209,10 @@ export async function run(rawArgs: string[]): Promise<void> {
 	}
 
 	if (args.command === "start") {
-		const result = applyConfig(args.cwd, config, loaded.path);
-		const runtime = resolveRuntimeContext(args.cwd, config);
-		if (isHeadroomEnabled(runtime.config)) {
-			printHeadroomReady(await ensureHeadroomReady(result.runtimeRoot, runtime.config));
-		}
-		if (runtime.config.taskplane.dashboard.enabled) {
-			try {
-				startDashboard(result.runtimeRoot, runtime.config, loaded.path);
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				console.error(chalk.yellow(`Warning: dashboard not started: ${message}`));
-			}
-		}
-		await startPi(runtime.config, {
-			cwd: result.runtimeRoot,
-			configPath: loaded.path,
-			target: args.target,
-			disableTmux: args.disableTmux,
-		});
+		await startConfiguredPi(
+			{ cwd: args.cwd, configPath: loaded.path, target: args.target, disableTmux: args.disableTmux },
+			loaded,
+		);
 		return;
 	}
 
