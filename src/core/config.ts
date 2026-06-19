@@ -5,7 +5,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 export const APP_NAME = "croc";
-export const VERSION = "0.3.0";
+export const VERSION = "0.4.0";
 export const CONFIG_FILE_NAME = "croc.json";
 export const CONFIG_FILE_NAMES = ["croc.yaml", "croc.yml", CONFIG_FILE_NAME] as const;
 export const CROC_CONFIG_VERSION = 1;
