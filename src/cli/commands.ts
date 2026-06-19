@@ -74,7 +74,10 @@ export const TASKPLANE_COMMANDS: readonly CliCommandHelp<TaskplaneCommandName>[]
 	{
 		name: "history",
 		summary: "Show persisted batch history and details",
-		usage: ["croc taskplane history [--limit <n>] [--json]", "croc taskplane history --batch <id|latest> [--agents] [--events]"],
+		usage: [
+			"croc taskplane history [--limit <n>] [--json]",
+			"croc taskplane history --batch <id|latest> [--agents] [--events]",
+		],
 		options: [
 			{ flags: "--limit <n>", description: "Limit compact history output" },
 			{ flags: "--json", description: "Print JSON output" },
@@ -111,14 +114,14 @@ export const TASKPLANE_COMMANDS: readonly CliCommandHelp<TaskplaneCommandName>[]
 		name: "tell",
 		summary: "Send a mailbox message to one active agent",
 		usage: ["croc taskplane tell <agentId> <text>"],
-		examples: ["croc taskplane tell croc-user-lane-1-worker \"wrap up and report status\""],
+		examples: ['croc taskplane tell croc-user-lane-1-worker "wrap up and report status"'],
 		delegatesTaskplaneHelp: true,
 	},
 	{
 		name: "broadcast",
 		summary: "Send a mailbox message to all active agents",
 		usage: ["croc taskplane broadcast <text>"],
-		examples: ["croc taskplane broadcast \"pause new work and report status\""],
+		examples: ['croc taskplane broadcast "pause new work and report status"'],
 		delegatesTaskplaneHelp: true,
 	},
 	{

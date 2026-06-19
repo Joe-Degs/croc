@@ -1,9 +1,9 @@
 import {
 	type CrocCommandName,
-	type TaskplaneCommandName,
 	isCrocCommandName,
 	isTaskplaneCommandName,
 	printHelp,
+	type TaskplaneCommandName,
 } from "./commands.ts";
 
 export { printHelp };
